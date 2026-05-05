@@ -24,6 +24,8 @@
   <nav class="nav" id="mainNav">
     {% if user.is_authenticated %}
       <span class="muted">{{ user.username }}</span>
+      {% if user.pi_settings.terminal_access %}<a class="button secondary" href="{% url 'terminal' %}" style="padding:6px 10px;font-size:13px">Terminal</a>{% endif %}
+      {% if user.is_staff %}<a class="button secondary" href="{% url 'admin:index' %}" style="padding:6px 10px;font-size:13px">Admin</a>{% endif %}
       <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="secondary">Logout</button></form>
     {% endif %}
   </nav>

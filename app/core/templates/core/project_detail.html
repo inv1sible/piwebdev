@@ -16,10 +16,12 @@
     </div>
     <div class="card compact">
       <h3>Git</h3>
-      <button class="secondary" id="gitInit">Init</button>
-      <button class="secondary" id="gitDiff">Status / Diff</button>
-      <button class="secondary" id="gitCommit">Commit</button>
-      <button class="secondary" id="gitPush">Push</button>
+      <div class="actions">
+        <button class="secondary" id="gitInit">Init</button>
+        <button class="secondary" id="gitDiff">Status / Diff</button>
+        <button class="secondary" id="gitCommit">Commit</button>
+        <button class="secondary" id="gitPush">Push</button>
+      </div>
       <pre id="gitOutput" class="diff-view"></pre>
     </div>
   </aside>
@@ -109,5 +111,6 @@
   <button data-mobile-panel="drawer">Menu</button>
   <button data-mobile-panel="chat-panel">Chat</button>
   <button data-mobile-panel="files-panel">Files</button>
+  {% if request.user.pi_settings.terminal_access %}<a class="bottom-tab-link" href="{% url 'terminal' %}">Terminal</a>{% endif %}
 </nav>
 {% endblock %}

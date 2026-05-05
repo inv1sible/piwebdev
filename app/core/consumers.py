@@ -7,7 +7,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.conf import settings
 from django.utils import timezone
-from .models import PiSession, ChatMessage, UserPiSettings, ProjectPiSettings
+from .models import PiSession, ChatMessage, UserPiSettings, ProjectPiSettings, TerminalSession
 
 
 class PiConsumer(AsyncWebsocketConsumer):
@@ -202,3 +202,141 @@ class PiConsumer(AsyncWebsocketConsumer):
     def mark_stopped(self):
         self.session.status = "stopped"
         self.session.save(update_fields=["status", "updated_at"])
+
+
+class TerminalConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self._bridge_reader = None
+        self._bridge_writer = None
+        self._read_task = None
+        self.session = None
+        self.user = self.scope["user"]
+
+        if not self.user.is_authenticated:
+            await self.close(code=4401)
+            return
+
+        if not await self.check_access():
+            await self.close(code=4403)
+            return
+
+        self.terminal_id = self.scope["url_route"]["kwargs"]["terminal_id"]
+        self.session = await self.get_session()
+        if not self.session:
+            await self.close(code=4404)
+            return
+
+        await self.accept()
+        await self.send_json({"type": "status", "message": "connecting"})
+        await self.start_bridge()
+
+    async def disconnect(self, code):
+        if self._read_task and not self._read_task.done():
+            self._read_task.cancel()
+        if self._bridge_writer and not self._bridge_writer.is_closing():
+            self._bridge_writer.close()
+            try:
+                await asyncio.wait_for(self._bridge_writer.wait_closed(), timeout=3)
+            except (asyncio.TimeoutError, Exception):
+                pass
+        if self.session:
+            await self.mark_idle()
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if not text_data:
+            return
+        try:
+            msg = json.loads(text_data)
+        except Exception:
+            return
+        t = msg.get("type")
+        if t == "data":
+            if self._bridge_writer and not self._bridge_writer.is_closing():
+                frame = json.dumps({"t": "d", "d": msg.get("d", "")}) + "\n"
+                self._bridge_writer.write(frame.encode())
+                await self._bridge_writer.drain()
+        elif t == "resize":
+            cols = max(10, int(msg.get("cols", 80)))
+            rows = max(5, int(msg.get("rows", 24)))
+            if self._bridge_writer and not self._bridge_writer.is_closing():
+                frame = json.dumps({"t": "r", "c": cols, "r": rows}) + "\n"
+                self._bridge_writer.write(frame.encode())
+                await self._bridge_writer.drain()
+            await self.save_size(cols, rows)
+        elif t == "ping":
+            await self.send_json({"type": "pong"})
+
+    async def start_bridge(self):
+        bridge_sock = getattr(settings, "TERMINAL_BRIDGE_SOCKET", "/var/opt/piwebdev/terminal-bridge.sock")
+        try:
+            self._bridge_reader, self._bridge_writer = await asyncio.open_unix_connection(bridge_sock)
+        except Exception as e:
+            await self.send_json({"type": "error", "message": f"terminal-bridge unavailable: {e}"})
+            await self.close()
+            return
+
+        init = json.dumps({"cols": self.session.last_cols, "rows": self.session.last_rows, "cwd": "/home/user01", "session_id": self.session.pk}) + "\n"
+        self._bridge_writer.write(init.encode())
+        await self._bridge_writer.drain()
+
+        await self.mark_running()
+        await self.send_json({"type": "status", "message": "connected"})
+        self._read_task = asyncio.create_task(self.read_bridge())
+
+    async def read_bridge(self):
+        try:
+            while self._bridge_reader and not self._bridge_reader.at_eof():
+                line = await self._bridge_reader.readline()
+                if not line:
+                    break
+                try:
+                    frame = json.loads(line.decode())
+                except Exception:
+                    continue
+                t = frame.get("t")
+                if t == "d":
+                    await self.send_json({"type": "data", "d": frame["d"]})
+                elif t == "status":
+                    await self.send_json({"type": "status", "message": frame.get("msg", "")})
+                elif t == "err":
+                    await self.send_json({"type": "error", "message": frame.get("msg", "bridge error")})
+        except (asyncio.CancelledError, Exception):
+            pass
+        finally:
+            await self.send_json({"type": "status", "message": "disconnected"})
+            await self.close()
+
+    async def send_json(self, data):
+        try:
+            await self.send(text_data=json.dumps(data))
+        except Exception:
+            pass
+
+    @database_sync_to_async
+    def check_access(self):
+        cfg, _ = UserPiSettings.objects.get_or_create(user=self.user)
+        return cfg.terminal_access
+
+    @database_sync_to_async
+    def get_session(self):
+        try:
+            return TerminalSession.objects.get(pk=self.terminal_id, user=self.user)
+        except TerminalSession.DoesNotExist:
+            return None
+
+    @database_sync_to_async
+    def mark_running(self):
+        self.session.status = "running"
+        self.session.last_connected_at = timezone.now()
+        self.session.save(update_fields=["status", "last_connected_at"])
+
+    @database_sync_to_async
+    def mark_idle(self):
+        self.session.status = "idle"
+        self.session.save(update_fields=["status"])
+
+    @database_sync_to_async
+    def save_size(self, cols, rows):
+        self.session.last_cols = cols
+        self.session.last_rows = rows
+        self.session.save(update_fields=["last_cols", "last_rows"])

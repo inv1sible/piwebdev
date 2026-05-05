@@ -1,0 +1,294 @@
+{% extends 'core/base.html' %}
+{% load static %}
+{% block title %}Terminal · π webui{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{% static 'core/xterm/xterm.min.css' %}">
+<style>
+.terminal-page{display:flex;flex-direction:column;height:calc(100vh - 54px);padding:10px;gap:6px;box-sizing:border-box}
+.term-toolbar{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.term-toolbar .status{font-family:ui-monospace,Menlo,monospace;font-size:13px}
+#termWrap{flex:1;min-height:0;background:#000;border-radius:12px;border:1px solid var(--border);overflow:hidden;padding:4px}
+#termWrap .xterm{height:100%}
+#termWrap .xterm-viewport{overflow-y:auto}
+#termToast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:8px 18px;font-size:13px;color:var(--accent);z-index:999;opacity:0;transition:opacity .2s;pointer-events:none}
+#termToast.show{opacity:1}
+</style>
+{% endblock %}
+
+{% block topbar_project %}
+<span class="topbar-project-group">
+  <a class="tpbar-back" href="/">← <span class="tpback-text">Projects</span></a>
+  <span class="topbar-sep">·</span>
+  <span class="topbar-project">Terminal</span>
+</span>
+{% endblock %}
+
+{% block content %}
+<div class="terminal-page">
+  <div class="term-toolbar">
+    <span class="status" id="termStatus">connecting…</span>
+    <button class="secondary" id="btnDisconnect" style="display:none">Disconnect</button>
+    <button class="secondary" id="btnReconnect" style="display:none">Reconnect</button>
+  </div>
+  <div class="term-keys" id="termKeys"></div>
+  <div id="termWrap"></div>
+</div>
+<div id="termToast"></div>
+
+<script src="{% static 'core/xterm/xterm.min.js' %}"></script>
+<script src="{% static 'core/xterm/addon-fit.min.js' %}"></script>
+<script>
+(function(){
+  const SESSION_ID = {{ session.id }};
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = `${proto}://${location.host}/ws/terminal/${SESSION_ID}/`;
+
+  // ── xterm ─────────────────────────────────────────────────────
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: 'ui-monospace,Menlo,"Courier New",monospace',
+    scrollback: 5000,
+    allowProposedApi: true,
+    rightClickSelectsWord: true,
+    theme: {
+      background:'#000000', foreground:'#e6edf3', cursor:'#72f1b8',
+      selectionBackground:'rgba(114,241,184,0.35)',
+      selectionForeground:'#000000',
+      selectionInactiveBackground:'rgba(114,241,184,0.15)',
+      black:'#0d1117',    red:'#ff7b72',    green:'#72f1b8',   yellow:'#ffd166',
+      blue:'#58a6ff',     magenta:'#d2a8ff', cyan:'#79c0ff',   white:'#e6edf3',
+      brightBlack:'#8b949e', brightRed:'#ff7b72', brightGreen:'#72f1b8',
+      brightYellow:'#ffd166', brightBlue:'#58a6ff', brightMagenta:'#d2a8ff',
+      brightCyan:'#79c0ff',   brightWhite:'#ffffff',
+    },
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById('termWrap'));
+  fitAddon.fit();
+
+  // ── Toast ─────────────────────────────────────────────────────
+  let toastTimer;
+  function toast(msg, err) {
+    const el = document.getElementById('termToast');
+    el.textContent = msg;
+    el.style.borderColor = err ? 'var(--danger)' : 'var(--accent)';
+    el.style.color = err ? 'var(--danger)' : 'var(--accent)';
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
+  }
+
+  // ── WebSocket ─────────────────────────────────────────────────
+  let ws = null;
+  let autoReconnect = true;
+  let reconnectTimer = null;
+
+  function setStatus(msg, cls) {
+    const el = document.getElementById('termStatus');
+    el.textContent = msg;
+    el.className = 'status ' + (cls || '');
+  }
+
+  function sendInput(data) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const bytes = new TextEncoder().encode(data);
+    let bin = ''; bytes.forEach(b => bin += String.fromCharCode(b));
+    ws.send(JSON.stringify({type: 'data', d: btoa(bin)}));
+  }
+
+  function sendResize() {
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({type: 'resize', cols: term.cols, rows: term.rows}));
+  }
+
+  function connect() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    clearTimeout(reconnectTimer);
+    if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+    setStatus('connecting…');
+
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      setStatus('connected', 'working');
+      document.getElementById('btnDisconnect').style.display = '';
+      document.getElementById('btnReconnect').style.display  = 'none';
+      sendResize();
+    };
+
+    ws.onmessage = evt => {
+      let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+      if (msg.type === 'data') {
+        const bin = atob(msg.d);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        term.write(bytes);
+      } else if (msg.type === 'status') {
+        if (msg.message === 'connected') {
+          setStatus('connected', 'working');
+        } else if (msg.message === 'resumed') {
+          setStatus('resumed', 'working');
+          term.writeln('\r\n\x1b[32m[session resumed]\x1b[0m');
+          // SIGWINCH already sent by bridge; also send a resize to ensure screen redraws
+          setTimeout(sendResize, 100);
+        } else if (msg.message === 'disconnected') {
+          setStatus('disconnected');
+          document.getElementById('btnReconnect').style.display = '';
+        }
+      } else if (msg.type === 'error') {
+        term.writeln('\r\n\x1b[31m[error] ' + msg.message + '\x1b[0m\r\n');
+        setStatus('error', 'reconnecting');
+      }
+    };
+
+    ws.onclose = () => {
+      setStatus('disconnected');
+      document.getElementById('btnDisconnect').style.display = 'none';
+      document.getElementById('btnReconnect').style.display  = '';
+      if (autoReconnect && !document.hidden) {
+        // Brief disconnect (e.g. server restart) — try once after 2s
+        reconnectTimer = setTimeout(() => {
+          if (!document.hidden) connect();
+        }, 2000);
+      }
+    };
+
+    ws.onerror = () => setStatus('error', 'reconnecting');
+  }
+
+  // Reconnect when page becomes visible again (app foregrounded)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 500);
+      }
+    }
+  });
+
+  term.onData(data => sendInput(data));
+
+  new ResizeObserver(() => fitAddon.fit()).observe(document.getElementById('termWrap'));
+  term.onResize(() => sendResize());
+
+  // Keepalive ping every 25s (under nginx's idle timeout)
+  setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({type: 'ping'}));
+  }, 25000);
+
+  document.getElementById('btnDisconnect').onclick = () => {
+    autoReconnect = false;
+    if (ws) ws.close();
+    setTimeout(() => { autoReconnect = true; }, 3000);
+  };
+  document.getElementById('btnReconnect').onclick = () => {
+    term.writeln('\r\n\x1b[33m[reconnecting…]\x1b[0m');
+    connect();
+  };
+
+  // ── Shortcut key bar ─────────────────────────────────────────
+  const KEYS_NORMAL = [
+    { label:'TAB',   seq:'\t',     tab:true  },   // tab FIRST — most used for completion
+    { label:'CTRL',  ctrl:true               },
+    { label:'ESC',   seq:'\x1b'              },
+    { label:'←',    seq:'\x1b[D'            },
+    { label:'↑',    seq:'\x1b[A'            },
+    { label:'↓',    seq:'\x1b[B'            },
+    { label:'→',    seq:'\x1b[C'            },
+    { label:'HOME',  seq:'\x1b[H'            },
+    { label:'END',   seq:'\x1b[F'            },
+    { label:'PGUP',  seq:'\x1b[5~'           },
+    { label:'PGDN',  seq:'\x1b[6~'           },
+    { label:'/',     seq:'/'                 },
+    { label:'~',    seq:'~'                 },
+    { label:'|',    seq:'|'                 },
+    { label:'COPY',  copy:true               },
+    { label:'PASTE', paste:true              },
+  ];
+  const KEYS_CTRL = [
+    { label:'✕',    exit:true    },
+    { label:'^C',   seq:'\x03'  },   // SIGINT / interrupt
+    { label:'^D',   seq:'\x04'  },   // EOF
+    { label:'^Z',   seq:'\x1a'  },   // SIGTSTP / suspend
+    { label:'^L',   seq:'\x0c'  },   // clear screen
+    { label:'^A',   seq:'\x01'  },   // beginning of line
+    { label:'^E',   seq:'\x05'  },   // end of line
+    { label:'^R',   seq:'\x12'  },   // reverse search
+    { label:'^W',   seq:'\x17'  },   // delete word back
+    { label:'^U',   seq:'\x15'  },   // clear to line start
+    { label:'^K',   seq:'\x0b'  },   // kill to line end
+    { label:'^T',   seq:'\x14'  },   // transpose chars
+  ];
+
+  let ctrlMode = false;
+  const keyBar = document.getElementById('termKeys');
+
+  function handleKey(k) {
+    if (k.ctrl) {
+      ctrlMode = true; renderKeys();
+    } else if (k.exit) {
+      ctrlMode = false; renderKeys();
+    } else if (k.copy) {
+      const sel = term.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel)
+          .then(() => toast('Copied!'))
+          .catch(() => toast('Copy failed', true));
+      } else {
+        toast('Select text first');
+      }
+    } else if (k.paste) {
+      navigator.clipboard.readText()
+        .then(t => { if (t) { sendInput(t); toast('Pasted'); } })
+        .catch(() => toast('Paste failed — check clipboard permission', true));
+    } else if (k.seq) {
+      sendInput(k.seq);
+      if (ctrlMode) { ctrlMode = false; renderKeys(); }
+    }
+  }
+
+  function renderKeys() {
+    const keys = ctrlMode ? KEYS_CTRL : KEYS_NORMAL;
+    keyBar.innerHTML = '';
+    keys.forEach(k => {
+      const btn = document.createElement('button');
+      btn.className = 'term-key';
+      if (k.exit) btn.classList.add('ctrl-on');
+      btn.textContent = k.label;
+
+      if (k.tab) {
+        // Force IME composition commit before sending \t:
+        // 1. preventDefault keeps the keyboard visible
+        // 2. explicit textarea.blur() synchronously fires compositionend → onData → ws.send(chars)
+        // 3. setTimeout(0) runs after that chain completes, so \t arrives after the prefix
+        btn.addEventListener('pointerdown', e => {
+          e.preventDefault();
+          if (term.textarea) term.textarea.blur();
+          setTimeout(() => {
+            sendInput('\t');
+            term.focus();
+          }, 0);
+        });
+      } else {
+        // All other keys use pointerdown + preventDefault to avoid focus shifts
+        // (keeps the mobile keyboard open and the terminal responsive).
+        btn.addEventListener('pointerdown', e => {
+          e.preventDefault();
+          handleKey(k);
+          term.focus();
+        });
+      }
+
+      keyBar.appendChild(btn);
+    });
+  }
+
+  renderKeys();
+  connect();
+})();
+</script>
+{% endblock %}

@@ -26,6 +26,7 @@ urlpatterns = [
     path("api/projects/<int:pk>/git/commit/", views.git_commit, name="git_commit"),
     path("api/projects/<int:pk>/git/push/", views.git_push, name="git_push"),
     path("api/projects/<int:pk>/git/init/", views.git_init, name="git_init"),
+    path("terminal/", views.terminal_page, name="terminal"),
     path("manifest.json", views.manifest, name="manifest"),
     path("offline/", views.offline, name="offline"),
     path("service-worker.js", views.service_worker, name="service_worker"),

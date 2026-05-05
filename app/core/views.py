@@ -18,7 +18,7 @@ from django.contrib.auth.views import LoginView
 from django_ratelimit.decorators import ratelimit
 from .auth_forms import UsernameOrEmailAuthenticationForm
 from .forms import ProjectCreateForm, ProjectRenameForm, ProjectMemoryForm, ProjectPiSettingsForm
-from .models import Project, ProjectMemory, ProjectPiSettings, UserPiSettings, PiSession, ChatMessage
+from .models import Project, ProjectMemory, ProjectPiSettings, UserPiSettings, PiSession, ChatMessage, TerminalSession
 from .utils import project_slug, safe_workspace_path, resolve_project_path, list_dir, safe_extract_zip
 
 
@@ -341,6 +341,16 @@ def git_init(request, pk):
     if not result["ok"]:
         return JsonResponse({"error": result["stderr"] or result["stdout"]}, status=500)
     return JsonResponse({"ok": True, "output": result["stdout"] or result["stderr"]})
+
+
+@login_required
+def terminal_page(request):
+    cfg, _ = UserPiSettings.objects.get_or_create(user=request.user)
+    if not cfg.terminal_access:
+        from django.http import HttpResponseForbidden
+        return HttpResponseForbidden("Terminal access not granted. Enable it in Django admin → User Pi Settings.")
+    session, _ = TerminalSession.objects.get_or_create(user=request.user)
+    return render(request, "core/terminal.html", {"session": session})
 
 
 def manifest(request):

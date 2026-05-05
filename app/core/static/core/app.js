@@ -197,12 +197,12 @@ if(shell){
         if(e.type==='message_update'&&d.type==='thinking_delta'){setStatus('thinking',true); if(!thinking)thinking=addDetails('analysis','Analysis / thinking',false); thinking.body.dataset.raw=(thinking.body.dataset.raw||'')+d.delta; thinking.body.innerHTML=md(thinking.body.dataset.raw); scrollChatEnd(); return}
         if(e.type==='tool_execution_start')upsertToolEvent(e);
         if(e.type==='tool_execution_update')upsertToolEvent(e);
-        if(e.type==='tool_execution_end')upsertToolEvent(e);
+        if(e.type==='tool_execution_end'){upsertToolEvent(e); if(['Write','Edit','NotebookEdit','MultiEdit'].includes(e.toolName))loadTree(currentPath);}
         if(e.type==='agent_end'){
           if(currentTask) finaliseTaskGroup(currentTask,assistant);
           else if(assistant) assistant.classList.add('final');
           assistant=null; thinking=null; currentTask=null; activeTools=new Map();
-          setStatus('idle'); return;
+          loadTree(currentPath); setStatus('idle'); return;
         }
       }
       if(m.type==='stderr')addDetails('tool','stderr',false,esc(m.content));

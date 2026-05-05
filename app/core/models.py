@@ -26,11 +26,15 @@ class ProjectMemory(models.Model):
 
 class UserPiSettings(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="pi_settings")
+
+    def __str__(self):
+        return self.user.get_full_name() or self.user.username or self.user.email
     provider = models.CharField(max_length=120, default=settings.DEFAULT_PI_PROVIDER)
     model = models.CharField(max_length=160, default=settings.DEFAULT_PI_MODEL)
     thinking_level = models.CharField(max_length=40, default=settings.DEFAULT_PI_THINKING)
     mindset = models.TextField(blank=True, default="")
     extra_args = models.CharField(max_length=500, blank=True, default="")
+    terminal_access = models.BooleanField(default=False)
 
 
 class ProjectPiSettings(models.Model):
@@ -61,6 +65,22 @@ class PiSession(models.Model):
 
     class Meta:
         ordering = ["-updated_at"]
+
+
+class TerminalSession(models.Model):
+    STATUS_CHOICES = [("idle", "Idle"), ("running", "Running")]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="terminal_sessions")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="idle")
+    last_cols = models.SmallIntegerField(default=80)
+    last_rows = models.SmallIntegerField(default=24)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_connected_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-last_connected_at"]
+
+    def __str__(self):
+        return f"Terminal #{self.pk} ({self.user})"
 
 
 class ChatMessage(models.Model):
