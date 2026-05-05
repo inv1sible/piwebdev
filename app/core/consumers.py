@@ -1,0 +1,204 @@
+import asyncio
+import json
+import os
+import shlex
+from pathlib import Path
+from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.db import database_sync_to_async
+from django.conf import settings
+from django.utils import timezone
+from .models import PiSession, ChatMessage, UserPiSettings, ProjectPiSettings
+
+
+class PiConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self._pi_reader = None
+        self._pi_writer = None
+        self.session = None
+        self.user = self.scope["user"]
+        if not self.user.is_authenticated:
+            await self.close(code=4401)
+            return
+        self.session_id = self.scope["url_route"]["kwargs"]["session_id"]
+        self.session = await self.get_session()
+        if not self.session:
+            await self.close(code=4404)
+            return
+        await self.accept()
+        await self.send_json({"type": "status", "message": "connected"})
+        await self.start_pi()
+
+    async def disconnect(self, code):
+        if self._pi_writer and not self._pi_writer.is_closing():
+            self._pi_writer.close()
+            try:
+                await asyncio.wait_for(self._pi_writer.wait_closed(), timeout=3)
+            except (asyncio.TimeoutError, Exception):
+                pass
+        if self.session:
+            await self.mark_stopped()
+
+    async def receive(self, text_data=None, bytes_data=None):
+        try:
+            data = json.loads(text_data or "{}")
+        except Exception:
+            return
+        if data.get("type") == "prompt":
+            msg = (data.get("message") or "").strip()
+            if not msg:
+                return
+            await self.store_message("user", msg)
+            await self.send_json({"type": "message", "role": "user", "content": msg})
+            payload = {"type": "prompt", "message": await self.build_prompt(msg), "streamingBehavior": "followUp"}
+            await self.write_pi(payload)
+        elif data.get("type") == "abort":
+            await self.write_pi({"type": "abort"})
+
+    async def start_pi(self):
+        cfg = await self.resolve_settings()
+        session_dir = await self.ensure_session_dir()
+        pi_args = ["--mode", "rpc", "--session-dir", session_dir]
+        if any(Path(session_dir).rglob("*.jsonl")):
+            pi_args.append("--continue")
+        if cfg["provider"]:
+            pi_args += ["--provider", cfg["provider"]]
+        if cfg["model"]:
+            pi_args += ["--model", cfg["model"]]
+        if cfg["thinking_level"]:
+            pi_args += ["--thinking", cfg["thinking_level"]]
+        if cfg["extra_args"]:
+            pi_args += shlex.split(cfg["extra_args"])
+
+        bridge_sock = getattr(settings, "PI_BRIDGE_SOCKET", "/var/opt/piwebdev/pi-bridge.sock")
+        try:
+            self._pi_reader, self._pi_writer = await asyncio.open_unix_connection(bridge_sock)
+        except Exception as e:
+            await self.send_json({"type": "stderr", "content": f"pi-bridge unavailable: {e}\n"})
+            await self.close()
+            return
+
+        init = json.dumps({"args": pi_args, "cwd": self.session.project.path}) + "\n"
+        self._pi_writer.write(init.encode())
+        await self._pi_writer.drain()
+
+        await self.mark_running(cfg)
+        await self.send_json({
+            "type": "status",
+            "message": f"pi ready — {self.session.project.path}",
+            "working": False,
+            "cwd": self.session.project.path,
+        })
+        asyncio.create_task(self.read_stdout())
+
+    async def read_stdout(self):
+        assistant = ""
+        try:
+            while self._pi_reader and not self._pi_reader.at_eof():
+                line = await self._pi_reader.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line.decode())
+                except Exception:
+                    await self.send_json({"type": "tool", "content": line.decode(errors="replace")})
+                    continue
+                await self.send_json({"type": "pi", "event": event})
+                t = event.get("type")
+                if t == "message_update":
+                    d = event.get("assistantMessageEvent") or {}
+                    if d.get("type") == "text_delta":
+                        assistant += d.get("delta", "")
+                        await self.send_json({"type": "assistant_delta", "delta": d.get("delta", "")})
+                elif t == "agent_end":
+                    if assistant.strip():
+                        await self.store_message("assistant", assistant, {"final": True})
+                        assistant = ""
+                    await self.send_json({"type": "status", "message": "idle"})
+                elif t and "tool" in t:
+                    await self.store_message("tool", json.dumps(event, indent=2), {"event_type": t, "tool_name": event.get("toolName") or "tool"})
+        except Exception:
+            pass
+        finally:
+            await self.send_json({"type": "status", "message": "idle", "working": False})
+
+    async def write_pi(self, payload):
+        if self._pi_writer and not self._pi_writer.is_closing():
+            self._pi_writer.write((json.dumps(payload) + "\n").encode())
+            await self._pi_writer.drain()
+
+    async def send_json(self, data):
+        await self.send(text_data=json.dumps(data))
+
+    @database_sync_to_async
+    def get_session(self):
+        try:
+            return PiSession.objects.select_related("project", "user").get(pk=self.session_id, user=self.user)
+        except PiSession.DoesNotExist:
+            return None
+
+    @database_sync_to_async
+    def store_message(self, role, content, metadata=None):
+        self.session.last_message_at = timezone.now()
+        self.session.save(update_fields=["last_message_at", "updated_at"])
+        return ChatMessage.objects.create(session=self.session, role=role, content=content, metadata=metadata or {})
+
+    @database_sync_to_async
+    def ensure_session_dir(self):
+        root = Path(self.session.project.path) / ".pi-sessions" / str(self.session.id)
+        root.mkdir(parents=True, exist_ok=True)
+        stored = self.session.session_dir
+        if not stored or not Path(stored).is_relative_to(self.session.project.path):
+            self.session.session_dir = str(root)
+            self.session.save(update_fields=["session_dir", "updated_at"])
+        return self.session.session_dir
+
+    @database_sync_to_async
+    def resolve_settings(self):
+        user_cfg, _ = UserPiSettings.objects.get_or_create(user=self.user)
+        project_cfg, _ = ProjectPiSettings.objects.get_or_create(project=self.session.project)
+        return {
+            "provider": project_cfg.provider or user_cfg.provider or settings.DEFAULT_PI_PROVIDER,
+            "model": project_cfg.model or user_cfg.model or settings.DEFAULT_PI_MODEL,
+            "thinking_level": project_cfg.thinking_level or user_cfg.thinking_level or settings.DEFAULT_PI_THINKING,
+            "mindset": "\n".join(x for x in [user_cfg.mindset, project_cfg.mindset] if x),
+            "inject_memory": project_cfg.inject_memory,
+            "extra_args": " ".join(x for x in [user_cfg.extra_args, project_cfg.extra_args] if x),
+        }
+
+    @database_sync_to_async
+    def build_prompt(self, msg):
+        cfg = ProjectPiSettings.objects.get_or_create(project=self.session.project)[0]
+        parts = []
+        # Always inject MEMORY.md — it is the project's persistent context
+        memory_file = Path(self.session.project.path) / "MEMORY.md"
+        if memory_file.exists():
+            memory_content = memory_file.read_text(encoding="utf-8").strip()
+        else:
+            memory_content = "# General Memory\n\n\n# Todos\n\n\n# Ideas For Later"
+        parts.append(
+            "Project memory (MEMORY.md in the project root):\n"
+            + memory_content
+            + "\n\n"
+            "IMPORTANT: After successfully completing this task, update MEMORY.md to reflect "
+            "what you learned — architecture decisions, conventions, solved problems, gotchas. "
+            "This file is committed to git and is your only persistent memory across sessions."
+        )
+        if cfg.mindset:
+            parts.append("Project mindset/flavour:\n" + cfg.mindset)
+        parts.append("User request:\n" + msg)
+        return "\n\n---\n\n".join(parts)
+
+    @database_sync_to_async
+    def mark_running(self, cfg):
+        self.session.status = "running"
+        self.session.provider = cfg["provider"]
+        self.session.model = cfg["model"]
+        self.session.thinking_level = cfg["thinking_level"]
+        self.session.mindset = cfg["mindset"]
+        self.session.last_started_at = timezone.now()
+        self.session.save()
+
+    @database_sync_to_async
+    def mark_stopped(self):
+        self.session.status = "stopped"
+        self.session.save(update_fields=["status", "updated_at"])

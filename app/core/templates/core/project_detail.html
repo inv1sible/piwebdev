@@ -1,0 +1,113 @@
+{% extends 'core/base.html' %}
+{% block topbar_project %}<span class="topbar-project-group"><a class="tpbar-back" href="/">← <span class="tpback-text">Projects</span></a><span class="topbar-sep">·</span><span class="topbar-project">{{ project.name }}</span></span>{% endblock %}
+{% block content %}
+<div class="project-shell" data-session-id="{{ session.id }}" data-project-id="{{ project.id }}">
+  <aside class="side drawer" id="drawer">
+    <div class="card compact">
+      <h2>{{ project.name }}</h2>
+      <p class="muted small">{{ project.path }}</p>
+      <p class="status" id="wsStatus">offline</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="{% url 'project_rename' project.pk %}">Rename</a>
+      <a class="button secondary" href="{% url 'project_memory' project.pk %}">Memory</a>
+      <a class="button secondary" href="{% url 'project_settings' project.pk %}">Pi settings</a>
+      <form method="post" action="{% url 'session_clear' session.pk %}" onsubmit="return confirm('Clear all messages? This cannot be undone.')">{% csrf_token %}<button type="submit" class="button secondary">Clear chat</button></form>
+    </div>
+    <div class="card compact">
+      <h3>Git</h3>
+      <button class="secondary" id="gitInit">Init</button>
+      <button class="secondary" id="gitDiff">Status / Diff</button>
+      <button class="secondary" id="gitCommit">Commit</button>
+      <button class="secondary" id="gitPush">Push</button>
+      <pre id="gitOutput" class="diff-view"></pre>
+    </div>
+  </aside>
+  <div class="resize-handle" data-resize="left" title="Drag to resize"></div>
+
+  <section class="chat-panel">
+    <div class="panel-head chat-head">
+      <button class="secondary icon pane-arrow" data-collapse="left" title="Toggle project pane">←</button>
+      <strong>Chat</strong>
+      <button class="secondary icon" id="abortBtn" title="Abort current task" style="display:none">■ Stop</button>
+      <button class="secondary icon pane-arrow" data-collapse="right" title="Toggle files pane">→</button>
+    </div>
+    <div class="messages" id="messages">
+      {% for task in tasks %}
+        <div class="task-wrap">
+          <details class="task-group{% if not task.result %} running{% endif %}"{% if not task.result %} open{% endif %}>
+            <summary class="task-summary">
+              <span class="task-prompt">{% if task.prompt %}{{ task.prompt.content|truncatechars:72 }}{% else %}Session{% endif %}</span>
+              <span class="task-badge {% if task.result %}done{% elif task.tools %}working{% else %}pending{% endif %}">{% if task.result %}done{% elif task.tools %}in progress{% else %}new{% endif %}</span>
+            </summary>
+            <div class="task-body">
+              {% for msg in task.tools %}
+                {% if msg.role == 'tool' or msg.role == 'stderr' %}
+                  <details class="msg tool" data-raw="{{ msg.content|escape }}">
+                    <summary>{{ msg.metadata.tool_name|default:msg.metadata.event_type|default:'tool' }}</summary>
+                    <div class="details-body">{{ msg.content|escape }}</div>
+                  </details>
+                {% else %}
+                  <div class="msg {{ msg.role }}" data-raw="{{ msg.content|escape }}">{{ msg.content|linebreaksbr }}</div>
+                {% endif %}
+              {% endfor %}
+            </div>
+          </details>
+          {% if task.result %}
+            <div class="task-result">
+              <div class="msg assistant final" data-raw="{{ task.result.content|escape }}">{{ task.result.content|linebreaksbr }}</div>
+            </div>
+          {% endif %}
+        </div>
+      {% empty %}
+        <p class="muted" style="padding:20px;text-align:center;font-size:13px">Send a prompt to start.</p>
+      {% endfor %}
+    </div>
+    <form class="composer" id="composer">
+      <textarea id="prompt" placeholder="Ask pi… Ctrl+Enter sends"></textarea>
+      <button id="sendBtn">Send</button>
+    </form>
+  </section>
+  <div class="resize-handle" data-resize="right" title="Drag to resize"></div>
+
+  <aside class="files-panel">
+    <div class="panel-head">
+      <strong>Files</strong>
+      <button class="secondary icon" id="newFileBtn" title="New file">+ File</button>
+    </div>
+    <div class="tabs">
+      <button data-tab="files" class="active">Files</button>
+      <button data-tab="editor">Editor</button>
+      <button data-tab="upload">Upload</button>
+    </div>
+    <div id="filesTab" class="tab-body"><div id="fileTree"></div></div>
+    <div id="editorTab" class="tab-body hidden">
+      <div class="editorbar"><span id="currentFile" class="muted">No file</span><button id="saveFile" class="secondary">Save</button></div>
+      <textarea id="editor" class="editor" spellcheck="false"></textarea>
+    </div>
+    <div id="uploadTab" class="tab-body hidden">
+      <form id="uploadForm">
+        <input type="hidden" name="path" id="uploadPath" value="">
+        <input type="file" name="files" multiple>
+        <label><input type="checkbox" name="extract_zip" value="1"> Extract zip files</label>
+        <button>Upload</button>
+      </form>
+    </div>
+  </aside>
+</div>
+<div class="modal-overlay hidden" id="memoryModal">
+  <div class="modal-box">
+    <div class="modal-head"><strong>Memory</strong><span class="muted small" id="memoryPath"></span></div>
+    <textarea id="memoryContent" class="editor" spellcheck="false"></textarea>
+    <div class="modal-foot">
+      <button id="memorySave">Save</button>
+      <button class="secondary" id="memoryCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+<nav class="bottom-tabs">
+  <button data-mobile-panel="drawer">Menu</button>
+  <button data-mobile-panel="chat-panel">Chat</button>
+  <button data-mobile-panel="files-panel">Files</button>
+</nav>
+{% endblock %}

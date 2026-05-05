@@ -1,0 +1,30 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.sample
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+ENV/
+
+# Django/local runtime data
+data/
+app/staticfiles/
+*.sqlite3
+*.sock
+
+# Pi/agent and editor local state
+.pi-sessions/
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# Logs and OS files
+*.log
+.DS_Store

@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: piwebdev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: piwebdev
+      POSTGRES_PASSWORD: 1v-l3K0MRGHBdcqHNW5hSIvxzRLWb6KIvcnK159JIng
+      POSTGRES_DB: piwebdev
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U piwebdev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: piwebdev-redis
+    restart: unless-stopped
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    container_name: piwebdev-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://piwebdev:1v-l3K0MRGHBdcqHNW5hSIvxzRLWb6KIvcnK159JIng@postgres:5432/piwebdev
+      REDIS_URL: redis://redis:6379/0
+      PI_BRIDGE_SOCKET: /var/opt/piwebdev/pi-bridge.sock
+    volumes:
+      - /var/opt:/var/opt
+    ports:
+      - "127.0.0.1:3142:3142"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    container_name: piwebdev-nginx
+    restart: unless-stopped
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "0.0.0.0:3143:3143"
+    depends_on:
+      - web

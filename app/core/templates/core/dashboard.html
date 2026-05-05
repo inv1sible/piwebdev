@@ -1,0 +1,19 @@
+{% extends 'core/base.html' %}
+{% block content %}
+<section class="wrap">
+  <div class="hero">
+    <div><h1>Projects</h1><p class="muted">Mounted from local disk under /var/opt.</p></div>
+    <a class="button" href="{% url 'project_create' %}">New project</a>
+  </div>
+  <div class="grid">
+    {% for p in projects %}
+      <a class="card project-card" href="{% url 'project_detail' p.pk %}">
+        <h2>{{ p.name }}</h2>
+        <p class="muted">{{ p.path }}</p>
+      </a>
+    {% empty %}
+      <div class="card"><p>No projects yet.</p></div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

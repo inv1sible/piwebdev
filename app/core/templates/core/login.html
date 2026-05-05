@@ -1,0 +1,12 @@
+{% extends 'core/base.html' %}
+{% block content %}
+<section class="login card">
+  <h1>Welcome back</h1>
+  <p class="muted">Sign in to π webui.</p>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button>Login</button>
+  </form>
+</section>
+{% endblock %}

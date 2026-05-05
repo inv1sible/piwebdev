@@ -1,0 +1,18 @@
+{% extends 'core/base.html' %}
+{% block topbar_project %}<span class="topbar-project-group"><a class="tpbar-back" href="{% url 'project_detail' project.pk %}">← <span class="tpback-text">{{ project.name }}</span></a></span>{% endblock %}
+{% block content %}
+<section class="wrap narrow">
+  <div class="card">
+    <h1>Memory — {{ project.name }}</h1>
+    <p class="muted small">Stored in <code>{{ project.path }}/MEMORY.md</code></p>
+    <form method="post">
+      {% csrf_token %}
+      <textarea name="content" rows="24" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.6">{{ content }}</textarea>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button type="submit">Save</button>
+        <a class="button secondary" href="{% url 'project_detail' project.pk %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends 'core/base.html' %}
+{% block content %}
+<section class="wrap narrow">
+  <a class="muted" href="javascript:history.back()">← Back</a>
+  <div class="card">
+    <h1>{{ title }}</h1>
+    <form method="post">
+      {% csrf_token %}
+      {% if form %}
+        {{ form.as_p }}
+      {% else %}
+        {% if memory_file %}<p class="muted" style="font-size:.8em">{{ memory_file }}</p>{% endif %}
+        <textarea name="content" rows="20" style="width:100%;font-family:monospace;font-size:.85em">{{ content }}</textarea>
+      {% endif %}
+      <button>Save</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

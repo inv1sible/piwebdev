@@ -1,0 +1,15 @@
+[Unit]
+Description=pi WebDev
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/opt/piwebdev/app
+ExecStart=/var/opt/piwebdev/venv/bin/daphne -b 0.0.0.0 -p 3142 piwebdev.asgi:application
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
