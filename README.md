@@ -16,6 +16,23 @@ piwebdev is intended for self-hosted review/development environments. The recomm
 - **PWA support** – manifest, service worker, and offline page for installable browser use.
 - **Admin controls** – Django admin for users, Pi settings, sessions, and chat messages.
 
+## Screenshots
+
+| Project dashboard | Project chat | Pi settings |
+| --- | --- | --- |
+| ![Project dashboard panel](media/01_dashboard.png) | ![Main chat view of a project](media/02_project-view.png) | ![Project-level pi.dev settings](media/03_pi-settings.png) |
+| Project dashboard panel. | Main chat view of a project. | Define pi.dev settings at project level. |
+
+| Project memory | File editor | Web terminal |
+| --- | --- | --- |
+| ![Project memory editor](media/04_memory.png) | ![Host file editor](media/05_file-editor.png) | ![Web terminal](media/06_terminal.png) |
+| The brain of piwebdev: update `MEMORY.md`, for example with a prompt like “analyze code base and update memory”. | Review and edit files directly on the host. | Web terminal for solving operational tasks such as `sudo` workflows. |
+
+| Uploads |  |  |
+| --- | --- | --- |
+| ![File upload workflow](media/07_upload.png) |  |  |
+| Upload files to the host. WIP. |  |  |
+
 ## Architecture
 
 Docker Compose runs:

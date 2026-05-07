@@ -20,7 +20,7 @@
 - Documentation treats Docker Compose as the recommended install path. `install.sh` is now a Docker-oriented bootstrapper: installs apt prerequisites, Docker/Compose as needed, Node/npm, the Pi npm package (`@mariozechner/pi-coding-agent` by default), creates `.env` if missing, runs `docker compose up -d --build`, and optionally calls `install-services.sh`.
 - `install-services.sh` automates host-side systemd setup for `pi-bridge`, `terminal-bridge`, and `exec-bridge`; key overrides include `SERVICE_USER`, `PI_BIN`, `PYTHON_BIN`, `TERMINAL_SHELL`, and bridge socket environment variables. The old host virtualenv/Daphne `install.sh` flow was removed.
 - Removed obsolete `finish-install.sh`; it was a legacy one-off installer for only `pi-bridge` plus rebuilding the `web` container, hard-coded to `/var/opt/piwebdev`, `user01`, and a specific NVM Node path. Current installs use `install.sh` and `install-services.sh`.
-- GitHub-facing docs were expanded in `README.md` (features, architecture, security, quick start) and `INSTALL.md` (prereqs, Compose setup, bridge services, verification, reverse proxy, updating, troubleshooting).
+- GitHub-facing docs were expanded in `README.md` (features, architecture, security, quick start, 3-column screenshots table using images from `media/`) and `INSTALL.md` (prereqs, Compose setup, bridge services, verification, reverse proxy, updating, troubleshooting).
 
 # Todos
 
