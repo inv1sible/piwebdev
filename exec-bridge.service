@@ -1,0 +1,12 @@
+[Unit]
+Description=Exec Bridge for piwebdev (host-side command runner)
+After=network.target
+
+[Service]
+User=user01
+ExecStart=/usr/bin/python3 /var/opt/piwebdev/exec-bridge.py
+Restart=on-failure
+Environment=EXEC_BRIDGE_SOCKET=/var/opt/piwebdev/exec-bridge.sock
+
+[Install]
+WantedBy=multi-user.target
