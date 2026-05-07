@@ -1,7 +1,7 @@
 # General Memory
 
 - Project root `/var/opt/piwebdev` is a Django/Channels web UI for the `pi` coding agent, intended to run from Docker at `http://SERVER:3142` behind Nginx Proxy Manager if desired.
-- Project root `/var/opt/piwebdev` was not a Git repository initially; initialized Git before the baseline commit.
+- Project root `/var/opt/piwebdev` was not a Git repository initially; initialized Git before the baseline commit. Git remote `origin` is `https://github.com/inv1sible/piwebdev.git`.
 - Added `.gitignore` to keep secrets/runtime artifacts out of version control: `.env`, virtualenvs, `data/`, collected `app/staticfiles/`, sockets, Pi session data, and local Claude settings.
 - Runtime stack: Django + Daphne/Channels, PostgreSQL, Redis, WhiteNoise static files, Docker Compose, plus host-side Unix socket bridges (`pi-bridge.py`, `terminal-bridge.py`, and `exec-bridge.py`).
 - Main Django app is `app/core`; project settings live in `app/piwebdev/settings.py`. URL routes are in `app/piwebdev/urls.py`; websocket routes are in `app/core/routing.py`.
