@@ -83,17 +83,9 @@ def project_create(request):
     return render(request, "core/project_form.html", {"form": form, "title": "Create project"})
 
 
-@login_required
-def project_detail(request, pk):
-    project = get_object_or_404(Project, pk=pk)
-    session = project.sessions.filter(user=request.user, status__in=["idle", "running", "stopped"]).first()
-    if not session:
-        session = PiSession.objects.create(project=project, user=request.user, title="Main session")
-    ProjectMemory.objects.get_or_create(project=project)
-    ProjectPiSettings.objects.get_or_create(project=project)
-    tasks = []
-    current_task = None
-    for msg in session.messages.order_by("created_at"):
+def _group_into_tasks(msgs):
+    tasks, current_task = [], None
+    for msg in msgs:
         if msg.role == "user":
             current_task = {"prompt": msg, "tools": [], "result": None}
             tasks.append(current_task)
@@ -105,7 +97,26 @@ def project_detail(request, pk):
         else:
             current_task = {"prompt": None, "tools": [msg], "result": None}
             tasks.append(current_task)
-    return render(request, "core/project_detail.html", {"project": project, "session": session, "tasks": tasks})
+    return tasks
+
+
+@login_required
+def project_detail(request, pk):
+    project = get_object_or_404(Project, pk=pk)
+    session = project.sessions.filter(user=request.user, status__in=["idle", "running", "stopped"]).first()
+    if not session:
+        session = PiSession.objects.create(project=project, user=request.user, title="Main session")
+    ProjectMemory.objects.get_or_create(project=project)
+    ProjectPiSettings.objects.get_or_create(project=project)
+    sections, current_msgs = [], []
+    for msg in session.messages.order_by("created_at"):
+        if msg.role == "system" and msg.metadata.get("type") == "checkpoint":
+            sections.append({"checkpoint": msg, "tasks": _group_into_tasks(current_msgs)})
+            current_msgs = []
+        else:
+            current_msgs.append(msg)
+    sections.append({"checkpoint": None, "tasks": _group_into_tasks(current_msgs)})
+    return render(request, "core/project_detail.html", {"project": project, "session": session, "sections": sections})
 
 
 @login_required
@@ -381,7 +392,7 @@ def offline(request):
 
 
 def service_worker(request):
-    version = "20260504-5"
+    version = "20260506-15"
     body = f"""
 const CACHE = 'piwebdev-{version}';
 const ASSETS = [

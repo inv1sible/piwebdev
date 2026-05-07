@@ -7,6 +7,7 @@
       <h2>{{ project.name }}</h2>
       <p class="muted small">{{ project.path }}</p>
       <p class="status" id="wsStatus">offline</p>
+      <div class="runtime-bar" id="runtimeBar"></div>
     </div>
     <div class="actions">
       <a class="button secondary" href="{% url 'project_rename' project.pk %}">Rename</a>
@@ -31,38 +32,58 @@
     <div class="panel-head chat-head">
       <button class="secondary icon pane-arrow" data-collapse="left" title="Toggle project pane">←</button>
       <strong>Chat</strong>
+      <span class="status chat-status" id="wsStatusCompact">offline</span>
+      <button class="secondary icon" id="focusBtn" title="Focus — collapse completed tasks">◎</button>
+      <button class="secondary icon" id="ackBtn" title="Acknowledge — collapse history and update memory">✓ Ack</button>
       <button class="secondary icon" id="abortBtn" title="Abort current task" style="display:none">■ Stop</button>
       <button class="secondary icon pane-arrow" data-collapse="right" title="Toggle files pane">→</button>
     </div>
     <div class="messages" id="messages">
-      {% for task in tasks %}
-        <div class="task-wrap">
-          <details class="task-group{% if not task.result %} running{% endif %}"{% if not task.result %} open{% endif %}>
-            <summary class="task-summary">
-              <span class="task-prompt">{% if task.prompt %}{{ task.prompt.content|truncatechars:72 }}{% else %}Session{% endif %}</span>
-              <span class="task-badge {% if task.result %}done{% elif task.tools %}working{% else %}pending{% endif %}">{% if task.result %}done{% elif task.tools %}in progress{% else %}new{% endif %}</span>
+      {% for section in sections %}
+        {% if section.checkpoint %}
+          <details class="session-section">
+            <summary class="session-summary">
+              <span class="task-chevron">▾</span>
+              <span class="session-label">{{ section.checkpoint.content }}</span>
+              <span class="session-badge">{{ section.tasks|length }} task{{ section.tasks|length|pluralize }}</span>
             </summary>
-            <div class="task-body">
-              {% for msg in task.tools %}
-                {% if msg.role == 'tool' or msg.role == 'stderr' %}
-                  <details class="msg tool" data-raw="{{ msg.content|escape }}">
-                    <summary>{{ msg.metadata.tool_name|default:msg.metadata.event_type|default:'tool' }}</summary>
-                    <div class="details-body">{{ msg.content|escape }}</div>
-                  </details>
-                {% else %}
-                  <div class="msg {{ msg.role }}" data-raw="{{ msg.content|escape }}">{{ msg.content|linebreaksbr }}</div>
-                {% endif %}
-              {% endfor %}
+            <div class="session-body">
+        {% endif %}
+        {% for task in section.tasks %}
+          <div class="task-wrap">
+            <details class="task-group{% if not task.result %} incomplete{% endif %}">
+              <summary class="task-summary">
+                <span class="task-chevron">▾</span>
+                <span class="task-prompt">{% if task.prompt %}{{ task.prompt.content|truncatechars:72 }}{% else %}Session{% endif %}</span>
+                <span class="task-badge {% if task.result %}done{% elif task.tools %}incomplete{% else %}pending{% endif %}">{% if task.result %}done{% elif task.tools %}incomplete{% else %}new{% endif %}</span>
+                {% if not task.result and task.prompt %}<button class="play-btn secondary icon" data-prompt="{{ task.prompt.content|escape }}" title="Re-run this task">▶</button>{% endif %}
+              </summary>
+              <div class="task-body">
+                {% for msg in task.tools %}
+                  {% if msg.role == 'tool' or msg.role == 'stderr' %}
+                    <details class="msg tool" data-raw="{{ msg.content|escape }}">
+                      <summary>{{ msg.metadata.tool_name|default:msg.metadata.event_type|default:'tool' }}</summary>
+                      <div class="details-body">{{ msg.content|escape }}</div>
+                    </details>
+                  {% else %}
+                    <div class="msg {{ msg.role }}" data-raw="{{ msg.content|escape }}">{{ msg.content|linebreaksbr }}</div>
+                  {% endif %}
+                {% endfor %}
+              </div>
+              {% if task.result %}
+                <div class="task-result">
+                  <div class="msg assistant final" data-raw="{{ task.result.content|escape }}">{{ task.result.content|linebreaksbr }}</div>
+                </div>
+              {% endif %}
+            </details>
+          </div>
+        {% empty %}
+          {% if not section.checkpoint %}<p class="muted" style="padding:20px;text-align:center;font-size:13px">Send a prompt to start.</p>{% endif %}
+        {% endfor %}
+        {% if section.checkpoint %}
             </div>
           </details>
-          {% if task.result %}
-            <div class="task-result">
-              <div class="msg assistant final" data-raw="{{ task.result.content|escape }}">{{ task.result.content|linebreaksbr }}</div>
-            </div>
-          {% endif %}
-        </div>
-      {% empty %}
-        <p class="muted" style="padding:20px;text-align:center;font-size:13px">Send a prompt to start.</p>
+        {% endif %}
       {% endfor %}
     </div>
     <form class="composer" id="composer">

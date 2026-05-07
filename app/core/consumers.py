@@ -51,7 +51,12 @@ class PiConsumer(AsyncWebsocketConsumer):
             await self.send_json({"type": "message", "role": "user", "content": msg})
             payload = {"type": "prompt", "message": await self.build_prompt(msg), "streamingBehavior": "followUp"}
             await self.write_pi(payload)
+        elif data.get("type") == "checkpoint":
+            label = (data.get("label") or "").strip()[:80] or "Checkpoint"
+            await self.store_message("system", label, {"type": "checkpoint"})
+            await self.send_json({"type": "checkpoint", "label": label})
         elif data.get("type") == "abort":
+            await self.send_json({"type": "status", "message": "stopping…", "working": True})
             await self.write_pi({"type": "abort"})
 
     async def start_pi(self):
@@ -77,44 +82,112 @@ class PiConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
 
-        init = json.dumps({"args": pi_args, "cwd": self.session.project.path}) + "\n"
+        init = json.dumps({
+            "args": pi_args,
+            "cwd": self.session.project.path,
+            "session_key": session_dir,
+        }) + "\n"
         self._pi_writer.write(init.encode())
         await self._pi_writer.drain()
 
-        await self.mark_running(cfg)
-        await self.send_json({
-            "type": "status",
-            "message": f"pi ready — {self.session.project.path}",
-            "working": False,
-            "cwd": self.session.project.path,
-        })
-        asyncio.create_task(self.read_stdout())
+        # Read handshake line from pi-bridge (started / resuming / busy / error)
+        try:
+            hs_line = await asyncio.wait_for(self._pi_reader.readline(), timeout=30)
+            hs = json.loads(hs_line.decode())
+        except Exception as e:
+            await self.send_json({"type": "stderr", "content": f"pi-bridge handshake failed: {e}\n"})
+            await self.close()
+            return
 
-    async def read_stdout(self):
+        if hs.get("status") == "error":
+            await self.send_json({"type": "stderr", "content": hs.get("message", "pi spawn error")})
+            await self.close()
+            return
+
+        if hs.get("status") == "busy":
+            await self.send_json({"type": "stderr", "content": "Another client is already connected to this session. Close the other tab first."})
+            await self.close()
+            return
+
+        await self.mark_running(cfg)
+
+        replay_count = 0
+        if hs.get("status") == "resuming":
+            replay_count = hs.get("buffered", 0)
+            if replay_count:
+                # Buffered events exist — agent was actively working while offline
+                await self.send_json({
+                    "type": "status",
+                    "message": f"resumed — catching up ({replay_count} event{'s' if replay_count != 1 else ''})",
+                    "working": True,
+                    "model": cfg["model"],
+                    "provider": cfg["provider"],
+                })
+            else:
+                # Pi process alive but idle (e.g. followUp mode waiting for next prompt)
+                # Reconnect silently — identical to a fresh start
+                await self.send_json({
+                    "type": "status",
+                    "message": "pi ready",
+                    "working": False,
+                    "cwd": self.session.project.path,
+                    "model": cfg["model"],
+                    "provider": cfg["provider"],
+                })
+        else:
+            await self.send_json({
+                "type": "status",
+                "message": "pi ready",
+                "working": False,
+                "cwd": self.session.project.path,
+                "model": cfg["model"],
+                "provider": cfg["provider"],
+            })
+
+        asyncio.create_task(self.read_stdout(replay_count=replay_count))
+
+    async def read_stdout(self, replay_count: int = 0):
         assistant = ""
+        n = 0  # events processed so far
         try:
             while self._pi_reader and not self._pi_reader.at_eof():
                 line = await self._pi_reader.readline()
                 if not line:
                     break
+                is_replay = n < replay_count
+                n += 1
                 try:
                     event = json.loads(line.decode())
                 except Exception:
-                    await self.send_json({"type": "tool", "content": line.decode(errors="replace")})
+                    if not is_replay:
+                        await self.send_json({"type": "tool", "content": line.decode(errors="replace")})
                     continue
-                await self.send_json({"type": "pi", "event": event})
+
+                if not is_replay:
+                    await self.send_json({"type": "pi", "event": event})
+
                 t = event.get("type")
                 if t == "message_update":
                     d = event.get("assistantMessageEvent") or {}
                     if d.get("type") == "text_delta":
-                        assistant += d.get("delta", "")
-                        await self.send_json({"type": "assistant_delta", "delta": d.get("delta", "")})
+                        delta = d.get("delta", "")
+                        assistant += delta
+                        if not is_replay:
+                            await self.send_json({"type": "assistant_delta", "delta": delta})
                 elif t == "agent_end":
                     if assistant.strip():
                         await self.store_message("assistant", assistant, {"final": True})
                         assistant = ""
-                    await self.send_json({"type": "status", "message": "idle"})
+                    if is_replay:
+                        # Task completed while the browser was away
+                        await self.send_json({
+                            "type": "toast",
+                            "message": "Task completed while you were away — results saved.",
+                            "toast_type": "ok",
+                        })
+                    await self.send_json({"type": "status", "message": "idle", "working": False})
                 elif t and "tool" in t:
+                    # Store tool events — during replay these are events that were never stored
                     await self.store_message("tool", json.dumps(event, indent=2), {"event_type": t, "tool_name": event.get("toolName") or "tool"})
         except Exception:
             pass
@@ -127,7 +200,10 @@ class PiConsumer(AsyncWebsocketConsumer):
             await self._pi_writer.drain()
 
     async def send_json(self, data):
-        await self.send(text_data=json.dumps(data))
+        try:
+            await self.send(text_data=json.dumps(data))
+        except Exception:
+            pass
 
     @database_sync_to_async
     def get_session(self):
@@ -185,6 +261,14 @@ class PiConsumer(AsyncWebsocketConsumer):
         )
         if cfg.mindset:
             parts.append("Project mindset/flavour:\n" + cfg.mindset)
+        parts.append(
+            "Workflow — always follow these steps in order before writing any code:\n"
+            "1. Understand – Restate the task briefly in your own words to confirm you grasp it.\n"
+            "2. Explore – Read the relevant source files. Map what exists before touching anything.\n"
+            "3. Clarify – If anything is ambiguous, ask specific questions and STOP. Wait for the user's answers before proceeding.\n"
+            "4. Plan – State exactly which files you will change and how.\n"
+            "5. Code – Only after steps 1-4 are complete, make the actual edits."
+        )
         parts.append("User request:\n" + msg)
         return "\n\n---\n\n".join(parts)
 

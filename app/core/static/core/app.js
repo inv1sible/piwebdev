@@ -45,7 +45,9 @@ const shell=$('.project-shell');
 if(shell){
   const sessionId=shell.dataset.sessionId, projectId=shell.dataset.projectId;
   const messagesEl=()=>$('#messages');
-  function scrollChatEnd(smooth=false){const m=messagesEl(); if(!m)return; requestAnimationFrame(()=>{m.scrollTo({top:m.scrollHeight,behavior:smooth?'smooth':'auto'})})}
+  let userScrolled=false, _scrollLock=false;
+  function scrollChatEnd(smooth=false){const m=messagesEl(); if(!m||userScrolled)return; _scrollLock=true; requestAnimationFrame(()=>{m.scrollTo({top:m.scrollHeight,behavior:smooth?'smooth':'auto'}); setTimeout(()=>{_scrollLock=false},smooth?600:100)})}
+  function scrollToEl(el,smooth=false){if(!el||userScrolled)return; _scrollLock=true; requestAnimationFrame(()=>{el.scrollIntoView({behavior:smooth?'smooth':'auto',block:'end'}); setTimeout(()=>{_scrollLock=false},100)})}
   function setViewportHeight(){
     const vv=window.visualViewport;
     const h=vv?vv.height:window.innerHeight;
@@ -74,44 +76,86 @@ if(shell){
   const wsUrl=`${proto}://${location.host}/ws/sessions/${sessionId}/`;
   let ws=null, wsDelay=1000;
   let assistant=null, thinking=null, activeTools=new Map(), currentTask=null;
-  let piWorking=false;
+  let piWorking=false, workStart=0, workingTimer=null, statusBase='';
+  let sessionStart=0, sessionTimer=null, toolsTotal=0, currentModel='', currentProvider='', wsReconnectTimer=null;
+  let wasResumed=false;
+
+  function elapsed(){
+    const s=Math.floor((Date.now()-workStart)/1000);
+    return s<60?`${s}s`:`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  }
 
   function setWorking(on){
     piWorking=on;
     const btn=$('#abortBtn');
-    if(btn) btn.style.display=on?'':'none';
+    if(btn){btn.style.display=on?'':'none'; if(!on){btn.disabled=false; btn.textContent='■ Stop';}}
+    if(on){
+      if(!workingTimer){workStart=Date.now(); workingTimer=setInterval(()=>{const t=`${statusBase} (${elapsed()})`;const el=$('#wsStatus');if(el)el.textContent=t;const sc=$('#wsStatusCompact');if(sc)sc.textContent=t;},1000)}
+    } else if(workingTimer){clearInterval(workingTimer); workingTimer=null}
   }
 
   function setStatus(text,working=false){
-    const s=$('#wsStatus'); s.textContent=text;
-    s.classList.toggle('working',working);
-    s.classList.toggle('reconnecting',text==='reconnecting...');
+    statusBase=text;
+    const disp=working&&workingTimer?`${text} (${elapsed()})`:text;
+    const isReconn=text.startsWith('reconnecting');
+    const s=$('#wsStatus');
+    s.textContent=disp; s.classList.toggle('working',working); s.classList.toggle('reconnecting',isReconn);
+    const sc=$('#wsStatusCompact');
+    if(sc){sc.textContent=disp; sc.classList.toggle('working',working); sc.classList.toggle('reconnecting',isReconn);}
     setWorking(working);
   }
 
-  function createTaskGroup(promptText){
+  function startSessionTimer(){
+    if(sessionTimer)return;
+    sessionStart=Date.now(); toolsTotal=0;
+    sessionTimer=setInterval(updateRuntimeBar,1000);
+    updateRuntimeBar();
+  }
+  function stopSessionTimer(){if(sessionTimer){clearInterval(sessionTimer);sessionTimer=null;}}
+  function updateRuntimeBar(){
+    const bar=$('#runtimeBar'); if(!bar)return;
+    const chips=[];
+    if(currentModel)chips.push(`<span class="rc hi">${esc(currentModel)}</span>`);
+    if(currentProvider&&currentProvider!==currentModel)chips.push(`<span class="rc">${esc(currentProvider)}</span>`);
+    if(toolsTotal>0)chips.push(`<span class="rc">${toolsTotal} tool${toolsTotal>1?'s':''}</span>`);
+    if(sessionStart){const s=Math.floor((Date.now()-sessionStart)/1000);chips.push(`<span class="rc">${s<60?s+'s':Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}</span>`);}
+    bar.innerHTML=chips.join('');
+  }
+  function scheduleReconnect(){
+    if(wsReconnectTimer)clearTimeout(wsReconnectTimer);
+    wsReconnectTimer=setTimeout(()=>{wsReconnectTimer=null;connectWs();},wsDelay);
+    wsDelay=Math.min(wsDelay*2,30000);
+  }
+
+  function createTaskGroup(promptText,isAuto=false){
     const wrap=document.createElement('div');
     wrap.className='task-wrap';
     const el=document.createElement('details');
     el.className='task-group running'; el.open=true;
-    el.innerHTML=`<summary class="task-summary"><span class="task-prompt">${esc(promptText.slice(0,72))}</span><span class="task-badge working">working</span></summary><div class="task-body"></div>`;
+    const promptStyle=isAuto?'style="font-style:italic;opacity:.65"':'';
+    el.innerHTML=`<summary class="task-summary"><span class="task-chevron">▾</span><span class="task-prompt" ${promptStyle}>${esc(promptText.slice(0,72))}</span><span class="task-badge working">working</span></summary><div class="task-body"></div>`;
     const resultEl=document.createElement('div');
     resultEl.className='task-result hidden';
-    wrap.appendChild(el); wrap.appendChild(resultEl);
+    el.appendChild(resultEl); wrap.appendChild(el);
     $('#messages').appendChild(wrap); scrollChatEnd();
     return {el,body:el.querySelector('.task-body'),resultEl};
   }
-  function finaliseTaskGroup(task,assistantEl){
+  function finaliseTaskGroup(task,assistantEl,state='done'){
     task.el.classList.remove('running');
-    task.el.open=false;
     const badge=task.el.querySelector('.task-badge');
-    badge.className='task-badge done'; badge.textContent='done';
+    badge.className='task-badge '+state; badge.textContent=state;
     if(assistantEl){
       assistantEl.classList.add('final');
       task.resultEl.appendChild(assistantEl);
       task.resultEl.classList.remove('hidden');
     }
   }
+  function finishCurrentTask(state='done'){
+    if(currentTask) finaliseTaskGroup(currentTask,assistant,state);
+    else if(assistant) assistant.classList.add('final');
+    assistant=null; thinking=null; currentTask=null; activeTools=new Map();
+  }
+  function ensureTask(){if(!currentTask)currentTask=createTaskGroup('continuing…',true);}
 
   function add(role,content,raw=false){
     const el=document.createElement('div'); el.className='msg '+role;
@@ -178,33 +222,70 @@ if(shell){
   function renderStoredTool(raw){try{return toolHtml(JSON.parse(raw))}catch{return {titleHtml:esc('Tool output'),body:`<pre>${esc(raw)}</pre>`}}}
 
   function connectWs(){
+    if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
     ws=new WebSocket(wsUrl);
     ws.onopen=()=>{wsDelay=1000; setStatus('connected')};
     ws.onclose=(e)=>{
-      setWorking(false);
-      setStatus(`reconnecting... (ws closed: ${e.code})`);
-      setTimeout(connectWs,wsDelay);
-      wsDelay=Math.min(wsDelay*2,30000);
+      if(piWorking){
+        // Don't finalize — keep the task in running state so it can be adopted on reconnect
+        assistant=null; thinking=null; currentTask=null; activeTools=new Map();
+      }
+      setWorking(false); stopSessionTimer();
+      setStatus(`reconnecting... (${e.code})`);
+      scheduleReconnect();
     };
     ws.onerror=()=>setStatus('ws error — check console');
     ws.onmessage=ev=>{
       const m=JSON.parse(ev.data);
-      if(m.type==='status'){setStatus(m.message,m.working??(m.message!=='idle'&&m.message!=='connected'&&!m.message.startsWith('reconnecting')));return}
-      if(m.type==='assistant_delta'){setStatus('agent working',true); if(!assistant)assistant=add('assistant','',true); assistant.dataset.raw=(assistant.dataset.raw||'')+m.delta; assistant.innerHTML=md(assistant.dataset.raw); scrollChatEnd(); return}
+      if(m.type==='status'){
+        if(m.model)currentModel=m.model;
+        if(m.provider)currentProvider=m.provider;
+        const working=m.working??(m.message!=='idle'&&m.message!=='connected'&&!m.message.startsWith('reconnecting'));
+        if(m.message==='pi ready')startSessionTimer();
+        if(!working&&m.message==='idle'){
+          try{finishCurrentTask('done');}catch(err){}
+          if(wasResumed){wasResumed=false;toast('Loading full history…','ok');setTimeout(()=>location.reload(),1200);}
+        }
+        if(working&&(m.message.startsWith('resumed')||m.message.startsWith('catching'))){
+          wasResumed=true;
+          startSessionTimer();
+          if(!currentTask){
+            const all=$$('.task-group'), last=all[all.length-1];
+            if(last){
+              const badge=last.querySelector('.task-badge');
+              if(badge&&!badge.classList.contains('done')){
+                last.classList.add('running'); last.open=true;
+                badge.className='task-badge working'; badge.textContent='working';
+                const section=last.closest('.session-section'); if(section)section.open=true;
+                const playBtn=last.querySelector('.play-btn'); if(playBtn)playBtn.style.display='none';
+                let resultEl=last.querySelector('.task-result');
+                if(!resultEl){resultEl=document.createElement('div');resultEl.className='task-result hidden';last.appendChild(resultEl);}
+                currentTask={el:last,body:last.querySelector('.task-body'),resultEl};
+                scrollChatEnd();
+              }
+            }
+          }
+        }
+        setStatus(m.message,working);
+        updateRuntimeBar();
+        return;
+      }
+      if(m.type==='assistant_delta'){setStatus('agent working',true); ensureTask(); if(!assistant)assistant=add('assistant','',true); assistant.dataset.raw=(assistant.dataset.raw||'')+m.delta; assistant.innerHTML=md(assistant.dataset.raw); scrollChatEnd(); return}
       if(m.type==='pi'){
         const e=m.event||{}, d=e.assistantMessageEvent||{};
         if(e.type==='agent_start'||e.type==='turn_start')setStatus('agent working',true);
-        if(e.type==='message_update'&&d.type==='thinking_delta'){setStatus('thinking',true); if(!thinking)thinking=addDetails('analysis','Analysis / thinking',false); thinking.body.dataset.raw=(thinking.body.dataset.raw||'')+d.delta; thinking.body.innerHTML=md(thinking.body.dataset.raw); scrollChatEnd(); return}
-        if(e.type==='tool_execution_start')upsertToolEvent(e);
+        if(e.type==='message_update'&&d.type==='thinking_delta'){setStatus('thinking',true); ensureTask(); if(!thinking)thinking=addDetails('analysis','Analysis / thinking',false); thinking.body.dataset.raw=(thinking.body.dataset.raw||'')+d.delta; thinking.body.innerHTML=md(thinking.body.dataset.raw); scrollToEl(thinking.el); return}
+        if(e.type==='tool_execution_start'){ensureTask(); toolsTotal++; setStatus('running: '+(e.toolName||'tool'),true); upsertToolEvent(e); updateRuntimeBar();}
         if(e.type==='tool_execution_update')upsertToolEvent(e);
-        if(e.type==='tool_execution_end'){upsertToolEvent(e); if(['Write','Edit','NotebookEdit','MultiEdit'].includes(e.toolName))loadTree(currentPath);}
+        if(e.type==='tool_execution_end'){setStatus('agent working',true); upsertToolEvent(e); if(['Write','Edit','NotebookEdit','MultiEdit'].includes(e.toolName))loadTree(currentPath);}
         if(e.type==='agent_end'){
-          if(currentTask) finaliseTaskGroup(currentTask,assistant);
-          else if(assistant) assistant.classList.add('final');
-          assistant=null; thinking=null; currentTask=null; activeTools=new Map();
-          loadTree(currentPath); setStatus('idle'); return;
+          setStatus('idle'); updateRuntimeBar();
+          try{finishCurrentTask('done'); loadTree(currentPath);}catch(err){}
+          return;
         }
       }
+      if(m.type==='checkpoint'){location.reload();return;}
+      if(m.type==='toast'){toast(m.message,m.toast_type||'ok'); return;}
       if(m.type==='stderr')addDetails('tool','stderr',false,esc(m.content));
       if(m.type==='tool')addDetails('tool','tool output',false,esc(m.content));
       if(m.type==='message'){
@@ -214,10 +295,24 @@ if(shell){
     };
   }
   connectWs();
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible'&&(!ws||ws.readyState===WebSocket.CLOSED||ws.readyState===WebSocket.CLOSING)){
+      wsDelay=1000;
+      if(wsReconnectTimer){clearTimeout(wsReconnectTimer);wsReconnectTimer=null;}
+      connectWs();
+    }
+  });
+  window.addEventListener('pageshow',e=>{
+    if(e.persisted&&(!ws||ws.readyState!==WebSocket.OPEN)){
+      wsDelay=1000;
+      if(wsReconnectTimer){clearTimeout(wsReconnectTimer);wsReconnectTimer=null;}
+      connectWs();
+    }
+  });
 
-  $('#abortBtn').onclick=()=>{if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'abort'}))};
+  $('#abortBtn').onclick=()=>{const b=$('#abortBtn'); if(b){b.disabled=true;b.textContent='stopping…'} setStatus('stopping…',true); if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'abort'}))};
 
-  $('#composer').onsubmit=e=>{e.preventDefault(); const ta=$('#prompt'), msg=ta.value.trim(); if(!msg)return; if(!ws||ws.readyState!==WebSocket.OPEN){setStatus('not connected — wait or reload'); return;} ws.send(JSON.stringify({type:'prompt',message:msg})); ta.value=''; ta.style.height=''};
+  $('#composer').onsubmit=e=>{e.preventDefault(); const ta=$('#prompt'), msg=ta.value.trim(); if(!msg)return; if(!ws||ws.readyState!==WebSocket.OPEN){setStatus('not connected — wait or reload'); return;} $$('#messages .task-group').forEach(d=>d.open=false); userScrolled=false; ws.send(JSON.stringify({type:'prompt',message:msg})); ta.value=''; ta.style.height=''; setStatus('sending…',true);};
   $('#prompt').onfocus=()=>{document.body.classList.add('keyboard-open'); setViewportHeight(); setTimeout(()=>{scrollChatEnd(); $('#composer').scrollIntoView({block:'end',behavior:'smooth'})},250)};
   $('#prompt').onblur=()=>document.body.classList.remove('keyboard-open');
   $('#prompt').onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();$('#composer').requestSubmit()}};
@@ -330,6 +425,52 @@ if(shell){
     el.replaceWith(d);
   });
   loadTree();
+
+  // User scroll tracking — scrolling up sets userScrolled; reaching bottom clears it
+  {const m=$('#messages');if(m){let _pst=0;m.addEventListener('scroll',function(){const nB=this.scrollHeight-this.scrollTop-this.clientHeight<120;if(nB)userScrolled=false;else if(!_scrollLock&&this.scrollTop<_pst)userScrolled=true;_pst=this.scrollTop;},{passive:true});}}
+
+  // Focus button — collapse all completed task groups and tool details
+  let _fSaved=[];
+  $('#focusBtn')?.addEventListener('click',function(){
+    const on=this.classList.toggle('active');
+    if(on){
+      _fSaved=[];
+      $$('#messages details').forEach(d=>{
+        _fSaved.push({el:d,open:d.open});
+        if(d.classList.contains('task-group')&&d.classList.contains('running'))return;
+        d.open=false;
+      });
+    }else{_fSaved.forEach(({el,open})=>el.open=open);_fSaved=[];}
+  });
+
+  // Acknowledge button — create persistent checkpoint, reload page to show grouped history
+  $('#ackBtn')?.addEventListener('click',()=>{
+    if(piWorking){toast('Wait for the agent to finish before acknowledging.','err');return;}
+    if(!ws||ws.readyState!==WebSocket.OPEN){toast('Not connected — wait a moment.','err');return;}
+    const label=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    ws.send(JSON.stringify({type:'checkpoint',label}));
+    const btn=$('#ackBtn'); if(btn){btn.disabled=true;btn.textContent='saving…';}
+  });
+
+  // Play buttons — re-run incomplete / new tasks
+  $$('.play-btn').forEach(btn=>{
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      if(piWorking){toast('Wait for the current task to finish first.','err');return;}
+      const p=btn.dataset.prompt;
+      if(!p||!ws||ws.readyState!==WebSocket.OPEN){toast('Not connected — wait a moment.','err');return;}
+      const tg=btn.closest('.task-group');
+      if(tg){
+        tg.classList.remove('incomplete','running');
+        const b=tg.querySelector('.task-badge'); if(b){b.className='task-badge done';b.textContent='done';}
+        tg.open=false; btn.style.display='none';
+      }
+      const ta=$('#prompt');
+      ta.value=p; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,240)+'px';
+      userScrolled=false;
+      $('#composer').requestSubmit();
+    });
+  });
 
   const memoryBtn=$('#memoryBtn');
   if(memoryBtn){

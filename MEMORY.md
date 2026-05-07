@@ -16,6 +16,7 @@
 - PWA support is implemented directly in Django views (`manifest`, `offline`, `service_worker`) with cached core assets.
 - Login uses `PiLoginView` with username-or-email auth and POST rate limiting. Project creation is also rate limited.
 - Admin currently registers Project, ProjectMemory, UserPiSettings, ProjectPiSettings, PiSession, and ChatMessage; TerminalSession exists but is not registered in admin.
+- Chat working/Stop UX gotcha: frontend task groups must be finalised not only on raw `agent_end` events but also on explicit `status: idle` or websocket close; `pi-bridge.py` treats web UI `{"type":"abort"}` frames as a hard termination of the persistent pi process/session because blindly forwarding abort to pi stdin was not reliable.
 
 # Todos
 
