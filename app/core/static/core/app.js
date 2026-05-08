@@ -127,13 +127,14 @@ if(shell){
     wsDelay=Math.min(wsDelay*2,30000);
   }
 
+  function shortPrompt(s){s=String(s??''); return s.length>72?s.slice(0,71)+'…':s}
   function createTaskGroup(promptText,isAuto=false){
     const wrap=document.createElement('div');
     wrap.className='task-wrap';
     const el=document.createElement('details');
     el.className='task-group running'; el.open=true;
     const promptStyle=isAuto?'style="font-style:italic;opacity:.65"':'';
-    el.innerHTML=`<summary class="task-summary"><span class="task-chevron">▾</span><span class="task-prompt" ${promptStyle}>${esc(promptText.slice(0,72))}</span><span class="task-badge working">working</span></summary><div class="task-body"></div>`;
+    el.innerHTML=`<summary class="task-summary"><span class="task-chevron">▾</span><span class="task-prompt" data-full-prompt="${esc(promptText)}" ${promptStyle}>${esc(shortPrompt(promptText))}</span><span class="task-badge working">working</span></summary><div class="task-body"></div>`;
     const resultEl=document.createElement('div');
     resultEl.className='task-result hidden';
     el.appendChild(resultEl); wrap.appendChild(el);
@@ -245,6 +246,20 @@ if(shell){
         if(!working&&m.message==='idle'){
           try{finishCurrentTask('done');}catch(err){}
           if(wasResumed){wasResumed=false;toast('Loading full history…','ok');setTimeout(()=>location.reload(),1200);}
+        }
+        if(!working){
+          // Orphan recovery: task badges left "working" when pi crashed mid-task and currentTask was cleared on disconnect
+          $$('.task-badge.working').forEach(b=>{
+            b.className='task-badge incomplete'; b.textContent='incomplete';
+            const tg=b.closest('.task-group'); if(!tg)return;
+            tg.classList.remove('running'); tg.classList.add('incomplete');
+            if(!tg.querySelector('.play-btn')){
+              const promptEl=tg.querySelector('.task-prompt');
+              const prompt=promptEl?.dataset.fullPrompt||promptEl?.textContent||'';
+              if(prompt)b.insertAdjacentHTML('afterend',`<button class="play-btn secondary icon" data-prompt="${esc(prompt)}" title="Re-run this task">▶</button>`);
+            }
+            const playBtn=tg.querySelector('.play-btn'); if(playBtn)playBtn.style.display='';
+          });
         }
         if(working&&(m.message.startsWith('resumed')||m.message.startsWith('catching'))){
           wasResumed=true;
@@ -501,10 +516,35 @@ if(shell){
     const btn=$('#ackBtn'); if(btn){btn.disabled=true;btn.textContent='saving…';}
   });
 
-  // Play buttons — re-run incomplete / new tasks
-  $$('.play-btn').forEach(btn=>{
-    btn.addEventListener('click',e=>{
-      e.stopPropagation();
+  // Task prompt + action buttons
+  $('#messages')?.addEventListener('click',async e=>{
+    const promptEl=e.target.closest('.task-prompt');
+    if(promptEl){
+      e.preventDefault(); e.stopPropagation();
+      const full=promptEl.dataset.fullPrompt||promptEl.textContent;
+      const expanded=promptEl.classList.toggle('expanded');
+      promptEl.textContent=expanded?full:shortPrompt(full);
+      promptEl.closest('.task-group')?.setAttribute('open','');
+      return;
+    }
+    const doneBtn=e.target.closest('.done-btn');
+    if(doneBtn){
+      e.preventDefault(); e.stopPropagation();
+      const tg=doneBtn.closest('.task-group'), id=doneBtn.dataset.messageId;
+      if(!id)return;
+      try{
+        await api(`/api/projects/${projectId}/task/done/`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message_id:id})});
+        tg?.classList.remove('incomplete','running');
+        const b=tg?.querySelector('.task-badge'); if(b){b.className='task-badge done';b.textContent='done';}
+        tg?.querySelector('.play-btn')?.remove();
+        doneBtn.remove();
+        toast('Task marked done');
+      }catch(err){showError(err.message)}
+      return;
+    }
+    const btn=e.target.closest('.play-btn');
+    if(btn){
+      e.preventDefault(); e.stopPropagation();
       if(piWorking){toast('Wait for the current task to finish first.','err');return;}
       const p=btn.dataset.prompt;
       if(!p||!ws||ws.readyState!==WebSocket.OPEN){toast('Not connected — wait a moment.','err');return;}
@@ -512,13 +552,13 @@ if(shell){
       if(tg){
         tg.classList.remove('incomplete','running');
         const b=tg.querySelector('.task-badge'); if(b){b.className='task-badge done';b.textContent='done';}
-        tg.open=false; btn.style.display='none';
+        tg.open=false; tg.querySelector('.done-btn')?.remove(); btn.style.display='none';
       }
       const ta=$('#prompt');
       ta.value=p; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,240)+'px';
       userScrolled=false;
       $('#composer').requestSubmit();
-    });
+    }
   });
 
   const memoryBtn=$('#memoryBtn');

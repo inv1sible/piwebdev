@@ -86,11 +86,14 @@ async def _drain_stdout(session: PiSession):
             except asyncio.QueueFull:
                 pass
         _sessions.pop(session.session_key, None)
-        _log(f"session {session.session_key!r} stdout closed (pid={session.proc.pid})")
+        returncode = session.proc.returncode
+        _log(f"session {session.session_key!r} stdout closed (pid={session.proc.pid}, exit={returncode})")
         # Terminate process if stdout closed but process is still alive (e.g. pi crashed stdout but didn't exit)
-        if session.proc.returncode is None:
+        if returncode is None:
             try:
                 session.proc.terminate()
+                await asyncio.sleep(0)  # yield so process can be reaped
+                _log(f"session {session.session_key!r} terminated stale process (pid={session.proc.pid})")
             except Exception:
                 pass
 

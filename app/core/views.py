@@ -87,7 +87,7 @@ def _group_into_tasks(msgs):
     tasks, current_task = [], None
     for msg in msgs:
         if msg.role == "user":
-            current_task = {"prompt": msg, "tools": [], "result": None}
+            current_task = {"prompt": msg, "tools": [], "result": None, "manual_done": bool(msg.metadata.get("manual_done"))}
             tasks.append(current_task)
         elif msg.role == "assistant" and msg.metadata.get("final"):
             if current_task:
@@ -95,7 +95,7 @@ def _group_into_tasks(msgs):
         elif current_task is not None:
             current_task["tools"].append(msg)
         else:
-            current_task = {"prompt": None, "tools": [msg], "result": None}
+            current_task = {"prompt": None, "tools": [msg], "result": None, "manual_done": False}
             tasks.append(current_task)
     return tasks
 
@@ -250,6 +250,26 @@ def file_rename(request, pk):
 
 @login_required
 @require_POST
+def task_mark_done(request, pk):
+    get_object_or_404(Project, pk=pk)
+    data = json.loads(request.body or b"{}")
+    msg = get_object_or_404(
+        ChatMessage,
+        pk=data.get("message_id"),
+        role="user",
+        session__project_id=pk,
+        session__user=request.user,
+    )
+    meta = dict(msg.metadata or {})
+    meta["manual_done"] = True
+    meta["manual_done_at"] = timezone.now().isoformat()
+    msg.metadata = meta
+    msg.save(update_fields=["metadata"])
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
 def file_upload(request, pk):
     project = get_object_or_404(Project, pk=pk)
     rel = request.POST.get("path", "")
@@ -392,7 +412,7 @@ def offline(request):
 
 
 def service_worker(request):
-    version = "20260506-15"
+    version = "20260508-16"
     body = f"""
 const CACHE = 'piwebdev-{version}';
 const ASSETS = [
