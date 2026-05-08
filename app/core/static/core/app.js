@@ -325,7 +325,6 @@ if(shell){
     try{
       const j=await api(`/api/projects/${projectId}/files/?path=${encodeURIComponent(path)}`);
       $('#fileTree').innerHTML=(path?`<button class="file" data-dir="${path.split('/').slice(0,-1).join('/')}">..</button>`:'')+j.items.map(i=>`<button class="file" data-${i.is_dir?'dir':'file'}="${esc((path?path+'/':'')+i.name)}">${i.is_dir?'📁':'📄'} ${esc(i.name)}</button>`).join('');
-      $('#uploadPath').value=path;
     }catch(err){showError(err.message)}
   }
   $('#fileTree').onclick=e=>{const b=e.target.closest('button'); if(!b||b.dataset.longpress==='1'){if(b)b.dataset.longpress='';return} if(b.dataset.dir!==undefined)loadTree(b.dataset.dir); if(b.dataset.file!==undefined)openFile(b.dataset.file)};
@@ -334,13 +333,12 @@ if(shell){
 
   function showFileMenu(path, isDir){
     if(!path&&path!=='')return;
-    const actions=['rename'];
-    if(!isDir) actions.push('delete');
-    else actions.push('delete folder');
-    const choice=prompt(`${path}\n\nActions: ${actions.join(' | ')}\n\nType action:`,'rename');
-    if(!choice)return;
-    if(choice.trim()==='rename') renamePath(path);
-    else if(choice.trim().startsWith('delete')) deletePath(path);
+    const modal=document.createElement('div');
+    modal.className='action-popover';
+    modal.innerHTML=`<div class="action-box"><strong>${esc(path||'/')}</strong><select id="fileActionSelect"><option value="rename">Rename</option><option value="delete">${isDir?'Delete folder':'Delete'}</option></select><div class="action-row"><button class="secondary" data-cancel>Cancel</button><button data-ok>Apply</button></div></div>`;
+    document.body.appendChild(modal);
+    const close=()=>modal.remove();
+    modal.onclick=e=>{if(e.target===modal||e.target.closest('[data-cancel]'))close(); if(e.target.closest('[data-ok]')){const v=modal.querySelector('select').value; close(); if(v==='rename')renamePath(path); else deletePath(path)}};
   }
 
   async function openFile(path){
@@ -358,7 +356,58 @@ if(shell){
   };
 
   $('#saveFile').onclick=async e=>{e.preventDefault(); if(!currentFile)return; try{await api(`/api/projects/${projectId}/file/save/`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:currentFile,content:$('#editor').value})}); $('#currentFile').textContent=currentFile+' ✓'}catch(err){showError(err.message)}};
-  $('#uploadForm').onsubmit=async e=>{e.preventDefault(); const fd=new FormData(e.target); try{await fetch(`/api/projects/${projectId}/upload/`,{method:'POST',headers:{'X-CSRFToken':csrf()},body:fd}); loadTree(currentPath); showTab('files')}catch(err){showError(err.message)}};
+
+  const uploadPath=$('#uploadPath'), uploadFiles=$('#uploadFiles'), uploadBtn=$('#uploadBtn'), uploadSelected=$('#uploadSelected'), uploadStatus=$('#uploadStatus'), uploadDirSelect=$('#uploadDirSelect');
+  function setUploadPath(path=''){if(uploadPath)uploadPath.value=path||''; if(uploadDirSelect)uploadDirSelect.value=[...uploadDirSelect.options].some(o=>o.value===(path||''))?(path||''):''}
+  function updateUploadSelection(clearStatus=true){
+    const files=[...(uploadFiles?.files||[])];
+    if(uploadBtn) uploadBtn.disabled=files.length===0;
+    if(uploadSelected) uploadSelected.textContent=files.length?`${files.length} file${files.length===1?'':'s'} selected: ${files.slice(0,3).map(f=>f.name).join(', ')}${files.length>3?' …':''}`:'No files selected';
+    if(clearStatus&&uploadStatus) uploadStatus.textContent='';
+  }
+  async function loadUploadDirs(base='', depth=0, acc=['']){
+    if(depth>5)return acc;
+    const j=await api(`/api/projects/${projectId}/files/?path=${encodeURIComponent(base)}`);
+    for(const i of j.items.filter(x=>x.is_dir)){
+      const p=(base?base+'/':'')+i.name;
+      acc.push(p);
+      await loadUploadDirs(p,depth+1,acc);
+    }
+    return acc;
+  }
+  async function refreshUploadDirs(){
+    if(!uploadDirSelect)return;
+    try{
+      const keep=uploadPath?.value||'';
+      const dirs=await loadUploadDirs();
+      uploadDirSelect.innerHTML=dirs.map(d=>`<option value="${esc(d)}">${d?esc(d):'/ project root'}</option>`).join('');
+      setUploadPath(keep);
+    }catch(err){showError(err.message)}
+  }
+  uploadFiles?.addEventListener('change',()=>updateUploadSelection());
+  uploadDirSelect?.addEventListener('change',()=>setUploadPath(uploadDirSelect.value));
+  uploadPath?.addEventListener('input',()=>{if(uploadDirSelect)uploadDirSelect.value=[...uploadDirSelect.options].some(o=>o.value===uploadPath.value)?uploadPath.value:''});
+  refreshUploadDirs();
+  $('#uploadForm').onsubmit=async e=>{
+    e.preventDefault();
+    if(!uploadFiles?.files?.length){showError('Choose one or more files to upload'); return}
+    const fd=new FormData(e.target);
+    if(uploadBtn) uploadBtn.disabled=true;
+    if(uploadStatus) uploadStatus.textContent='Uploading…';
+    try{
+      const r=await fetch(`/api/projects/${projectId}/upload/`,{method:'POST',headers:{'X-CSRFToken':csrf()},body:fd});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(j.error||'upload failed');
+      if(uploadStatus) uploadStatus.textContent='Upload complete ✓';
+      e.target.reset();
+      setUploadPath(fd.get('path')||'');
+      updateUploadSelection();
+      await loadTree(currentPath);
+      await refreshUploadDirs();
+      showTab('files');
+    }catch(err){if(uploadStatus) uploadStatus.textContent='Upload failed'; showError(err.message); updateUploadSelection(false)}
+  };
+  updateUploadSelection();
   function showTab(name){$$('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name)); $$('.tab-body').forEach(x=>x.classList.add('hidden')); $('#'+name+'Tab').classList.remove('hidden')}
   $$('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
   scrollChatEnd();

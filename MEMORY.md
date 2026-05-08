@@ -21,6 +21,9 @@
 - `install-services.sh` automates host-side systemd setup for `pi-bridge`, `terminal-bridge`, and `exec-bridge`; key overrides include `SERVICE_USER`, `PI_BIN`, `PYTHON_BIN`, `TERMINAL_SHELL`, and bridge socket environment variables. The old host virtualenv/Daphne `install.sh` flow was removed.
 - Removed obsolete `finish-install.sh`; it was a legacy one-off installer for only `pi-bridge` plus rebuilding the `web` container, hard-coded to `/var/opt/piwebdev`, `user01`, and a specific NVM Node path. Current installs use `install.sh` and `install-services.sh`.
 - GitHub-facing docs were expanded in `README.md` (features, architecture, security, quick start, 3-column screenshots table using images from `media/`) and `INSTALL.md` (prereqs, Compose setup, bridge services, verification, reverse proxy, updating, troubleshooting).
+- Upload UI in `project_detail.html` posts to `file_upload`; it supports multiple files, optional zip extraction, and an editable relative destination path. Workflow is files first, destination second (default `/` project root via a directory select populated from the file API, with manual path override), then options. Deployment gotcha: Compose builds source into the `web` image and does not bind-mount `/app`, so template/static source edits require `docker compose up -d --build web`; the entrypoint then runs `collectstatic` into container `/app/staticfiles`.
+- File tree long-press actions are handled in frontend JS via a small select/dropdown dialog instead of a free-text prompt.
+- README upload docs were updated after the upload UI refinements; upload is no longer described as WIP.
 
 # Todos
 

@@ -31,7 +31,7 @@ piwebdev is intended for self-hosted review/development environments. The recomm
 | Uploads |  |  |
 | --- | --- | --- |
 | ![File upload workflow](media/07_upload.png) |  |  |
-| Upload files to the host. WIP. |  |  |
+| Upload multiple files to a chosen project directory, optionally extracting ZIP archives safely. |  |  |
 
 ## Architecture
 
