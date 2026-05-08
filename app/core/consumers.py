@@ -222,6 +222,7 @@ class PiConsumer(AsyncWebsocketConsumer):
     def ensure_session_dir(self):
         root = Path(self.session.project.path) / ".pi-sessions" / str(self.session.id)
         root.mkdir(parents=True, exist_ok=True)
+        root.chmod(0o777)  # allow pi process (host user) to write session files
         stored = self.session.session_dir
         if not stored or not Path(stored).is_relative_to(self.session.project.path):
             self.session.session_dir = str(root)

@@ -87,6 +87,12 @@ async def _drain_stdout(session: PiSession):
                 pass
         _sessions.pop(session.session_key, None)
         _log(f"session {session.session_key!r} stdout closed (pid={session.proc.pid})")
+        # Terminate process if stdout closed but process is still alive (e.g. pi crashed stdout but didn't exit)
+        if session.proc.returncode is None:
+            try:
+                session.proc.terminate()
+            except Exception:
+                pass
 
 
 async def _drain_stderr(session: PiSession):
