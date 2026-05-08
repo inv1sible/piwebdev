@@ -105,7 +105,7 @@ class PiConsumer(AsyncWebsocketConsumer):
             return
 
         if hs.get("status") == "busy":
-            await self.send_json({"type": "stderr", "content": "Another client is already connected to this session. Close the other tab first."})
+            await self.send_json({"type": "fatal", "message": "Another tab is already connected. Close it and reload."})
             await self.close()
             return
 

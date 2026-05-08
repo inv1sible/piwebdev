@@ -412,7 +412,7 @@ def offline(request):
 
 
 def service_worker(request):
-    version = "20260508-16"
+    version = "20260508-17"
     body = f"""
 const CACHE = 'piwebdev-{version}';
 const ASSETS = [

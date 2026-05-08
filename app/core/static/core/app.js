@@ -78,7 +78,7 @@ if(shell){
   let assistant=null, thinking=null, activeTools=new Map(), currentTask=null;
   let piWorking=false, workStart=0, workingTimer=null, statusBase='';
   let sessionStart=0, sessionTimer=null, toolsTotal=0, currentModel='', currentProvider='', wsReconnectTimer=null;
-  let wasResumed=false;
+  let wasResumed=false, fatalError=false;
 
   function elapsed(){
     const s=Math.floor((Date.now()-workStart)/1000);
@@ -225,13 +225,14 @@ if(shell){
   function connectWs(){
     if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
     ws=new WebSocket(wsUrl);
-    ws.onopen=()=>{wsDelay=1000; setStatus('connected')};
+    ws.onopen=()=>{wsDelay=1000; fatalError=false; setStatus('connected')};
     ws.onclose=(e)=>{
       if(piWorking){
         // Don't finalize — keep the task in running state so it can be adopted on reconnect
         assistant=null; thinking=null; currentTask=null; activeTools=new Map();
       }
       setWorking(false); stopSessionTimer();
+      if(fatalError){setStatus('disconnected — reload to reconnect'); return;}
       setStatus(`reconnecting... (${e.code})`);
       scheduleReconnect();
     };
@@ -299,6 +300,7 @@ if(shell){
           return;
         }
       }
+      if(m.type==='fatal'){fatalError=true; setStatus(m.message||'fatal error'); showError(m.message||'fatal error'); return;}
       if(m.type==='checkpoint'){location.reload();return;}
       if(m.type==='toast'){toast(m.message,m.toast_type||'ok'); return;}
       if(m.type==='stderr')addDetails('tool','stderr',false,esc(m.content));
