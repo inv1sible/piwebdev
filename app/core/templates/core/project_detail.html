@@ -51,12 +51,12 @@
         {% endif %}
         {% for task in section.tasks %}
           <div class="task-wrap">
-            <details class="task-group{% if not task.result %} incomplete{% endif %}">
+            <details class="task-group{% if not task.result and not task.manual_done %} incomplete{% endif %}">
               <summary class="task-summary">
                 <span class="task-chevron">▾</span>
-                <span class="task-prompt">{% if task.prompt %}{{ task.prompt.content|truncatechars:72 }}{% else %}Session{% endif %}</span>
-                <span class="task-badge {% if task.result %}done{% elif task.tools %}incomplete{% else %}pending{% endif %}">{% if task.result %}done{% elif task.tools %}incomplete{% else %}new{% endif %}</span>
-                {% if not task.result and task.prompt %}<button class="play-btn secondary icon" data-prompt="{{ task.prompt.content|escape }}" title="Re-run this task">▶</button>{% endif %}
+                <span class="task-prompt" data-full-prompt="{% if task.prompt %}{{ task.prompt.content|escape }}{% else %}Session{% endif %}">{% if task.prompt %}{{ task.prompt.content|truncatechars:72 }}{% else %}Session{% endif %}</span>
+                <span class="task-badge {% if task.result or task.manual_done %}done{% elif task.tools %}incomplete{% else %}pending{% endif %}">{% if task.result or task.manual_done %}done{% elif task.tools %}incomplete{% else %}new{% endif %}</span>
+                {% if not task.result and not task.manual_done and task.prompt %}<button class="done-btn secondary icon" data-message-id="{{ task.prompt.id }}" title="Mark task done">✓</button><button class="play-btn secondary icon" data-prompt="{{ task.prompt.content|escape }}" title="Re-run this task">▶</button>{% endif %}
               </summary>
               <div class="task-body">
                 {% for msg in task.tools %}

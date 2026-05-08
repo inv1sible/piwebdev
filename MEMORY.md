@@ -24,6 +24,7 @@
 - Upload UI in `project_detail.html` posts to `file_upload`; it supports multiple files, optional zip extraction, and an editable relative destination path. Workflow is files first, destination second (default `/` project root via a directory select populated from the file API, with manual path override), then options. Deployment gotcha: Compose builds source into the `web` image and does not bind-mount `/app`, so template/static source edits require `docker compose up -d --build web`; the entrypoint then runs `collectstatic` into container `/app/staticfiles`.
 - File tree long-press actions are handled in frontend JS via a small select/dropdown dialog instead of a free-text prompt.
 - README upload docs were updated after the upload UI refinements; upload is no longer described as WIP.
+- Chat task cards can be manually marked done via a checkmark button; this persists on the user `ChatMessage.metadata.manual_done` and is honored by `project_detail` task grouping. Clicking a task prompt toggles between truncated and full prompt text in the card.
 
 # Todos
 
