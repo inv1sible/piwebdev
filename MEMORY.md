@@ -28,14 +28,16 @@
 
 # Todos
 
-- Consider removing or wiring up the unused `ProjectPiSettings.inject_memory` flag so UI matches behavior.
-- Consider registering `TerminalSession` in Django admin if operators need visibility into terminal sessions.
+- Register `TerminalSession` in Django admin if operators need visibility into terminal sessions.
 - Avoid committing generated files such as `__pycache__` or collected `app/staticfiles/` if they are currently tracked.
 - Review `docker-compose.yml`: it contains a hard-coded Postgres password and grants the web container access to host `/var/opt` and Docker-related deployment power; keep deployment access tightly controlled.
+
+# Recent Changes
+
+- **Pi Settings Models Dropdown Fixed (2026-05-11)**: `app/core/utils.py` now reads `/home/entwickler/.pi/agent/models.json` (or `PI_MODELS_JSON_PATH` env var) to dynamically populate provider and model dropdowns. Added `DynamicChoiceField` in `forms.py` to reload choices at render time. Ollama provider and all models from `models.json` are now selectable, with reasoning-capable models marked `[R]`. The "model/provider discovery" idea from Ideas For Later is now implemented.
 
 # Ideas For Later
 
 - Add richer session management (multiple named Pi sessions per project, archive/restore UI).
 - Add stronger file editor features (syntax highlighting, binary file handling, safer large-file limits).
-- Add model/provider discovery or admin-configurable choices instead of hard-coded form choices.
 - Add tests around path traversal, zip extraction safety, websocket auth, and git API error cases.

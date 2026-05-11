@@ -49,6 +49,8 @@ class PiConsumer(AsyncWebsocketConsumer):
                 return
             await self.store_message("user", msg)
             await self.send_json({"type": "message", "role": "user", "content": msg})
+            # Signal that agent is starting to work
+            await self.send_json({"type": "status", "message": "agent working", "working": True})
             payload = {"type": "prompt", "message": await self.build_prompt(msg), "streamingBehavior": "followUp"}
             await self.write_pi(payload)
         elif data.get("type") == "checkpoint":
