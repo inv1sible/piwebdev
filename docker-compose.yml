@@ -42,6 +42,7 @@ services:
       PI_BRIDGE_SOCKET: /var/opt/piwebdev/pi-bridge.sock
     volumes:
       - /var/opt:/var/opt
+      - /home/entwickler/.pi:/home/entwickler/.pi:ro
     ports:
       - "127.0.0.1:3142:3142"
     depends_on:

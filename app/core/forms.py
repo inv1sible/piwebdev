@@ -1,7 +1,10 @@
+import copy
 from django import forms
 from .models import Project, ProjectMemory, ProjectPiSettings, UserPiSettings
+from .utils import get_provider_choices, get_model_choices
 
-PROVIDER_CHOICES = [
+# Static fallback choices (used if models.json unavailable)
+STATIC_PROVIDER_CHOICES = [
     ("", "— select provider —"),
     ("anthropic", "Anthropic"),
     ("openai", "OpenAI"),
@@ -9,14 +12,15 @@ PROVIDER_CHOICES = [
     ("gemini", "Gemini"),
     ("bedrock", "AWS Bedrock"),
     ("vertex", "Google Vertex"),
+    ("ollama", "Ollama (local)"),
 ]
 
-MODEL_CHOICES = [
+STATIC_MODEL_CHOICES = [
     ("", "— select model —"),
     # Anthropic
     ("claude-opus-4-7", "Claude Opus 4.7"),
     ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-    ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+    ("claude-haiku-4-5-20251022", "Claude Haiku 4.5"),
     ("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"),
     ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku"),
     # OpenAI
@@ -31,6 +35,40 @@ MODEL_CHOICES = [
     ("gemini-2.5-flash", "Gemini 2.5 Flash"),
 ]
 
+
+class DynamicChoiceField(forms.ChoiceField):
+    """ChoiceField that reloads choices at widget rendering time."""
+    def __init__(self, *args, choices_func=None, **kwargs):
+        self.choices_func = choices_func
+        # Set choices immediately so widget has them
+        choices = choices_func() if choices_func else []
+        super().__init__(*args, choices=choices, **kwargs)
+    
+    def __deepcopy__(self, memo):
+        # Handle deepcopy properly - copy all needed attributes
+        result = self.__class__.__new__(self.__class__)
+        result.choices_func = self.choices_func
+        result._choices = copy.deepcopy(self._choices, memo) if hasattr(self, '_choices') else []
+        result.widget = copy.deepcopy(self.widget, memo)
+        result.required = copy.deepcopy(self.required, memo)
+        result.label = getattr(self, 'label', None)
+        result.initial = getattr(self, 'initial', None)
+        result.help_text = getattr(self, 'help_text', '')
+        result.error_messages = copy.deepcopy(self.error_messages, memo)
+        result.show_hidden_initial = getattr(self, 'show_hidden_initial', False)
+        result.validators = copy.deepcopy(self.validators, memo)
+        result.label_suffix = getattr(self, 'label_suffix', None)
+        result.disabled = getattr(self, 'disabled', False)
+        result.localize = getattr(self, 'localize', False)
+        return result
+    
+    def valid_value(self, value):
+        # Validate against current choices
+        if self.choices_func:
+            current_choices = self.choices_func()
+            return value in [c[0] for c in current_choices]
+        return super().valid_value(value)
+
 THINKING_CHOICES = [
     ("", "— select thinking level —"),
     ("none", "None"),
@@ -41,9 +79,17 @@ THINKING_CHOICES = [
     ("auto", "Auto"),
 ]
 
-PROJECT_PROVIDER_CHOICES = [("", "— use general setting —")] + PROVIDER_CHOICES[1:]
-PROJECT_MODEL_CHOICES = [("", "— use general setting —")] + MODEL_CHOICES[1:]
-PROJECT_THINKING_CHOICES = [("", "— use general setting —")] + THINKING_CHOICES[1:]
+PROJECT_PROVIDER_CHOICES = [("", "— use general setting —")]
+PROJECT_MODEL_CHOICES = [("", "— use general setting —")]
+PROJECT_THINKING_CHOICES = [
+    ("", "— use general setting —"),
+    ("none", "None"),
+    ("minimal", "Minimal"),
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+    ("auto", "Auto"),
+]
 
 
 class ProjectCreateForm(forms.Form):
@@ -66,9 +112,9 @@ class ProjectMemoryForm(forms.ModelForm):
 
 
 class ProjectPiSettingsForm(forms.ModelForm):
-    provider = forms.ChoiceField(choices=PROJECT_PROVIDER_CHOICES, required=False)
-    model = forms.ChoiceField(choices=PROJECT_MODEL_CHOICES, required=False)
-    thinking_level = forms.ChoiceField(choices=PROJECT_THINKING_CHOICES, required=False)
+    provider = DynamicChoiceField(choices_func=get_provider_choices, required=False, widget=forms.Select(attrs={'class': 'form-select'}))
+    model = DynamicChoiceField(choices_func=get_model_choices, required=False, widget=forms.Select(attrs={'class': 'form-select'}))
+    thinking_level = forms.ChoiceField(choices=PROJECT_THINKING_CHOICES, required=False, widget=forms.Select(attrs={'class': 'form-select'}))
 
     class Meta:
         model = ProjectPiSettings
@@ -77,9 +123,9 @@ class ProjectPiSettingsForm(forms.ModelForm):
 
 
 class UserPiSettingsForm(forms.ModelForm):
-    provider = forms.ChoiceField(choices=PROVIDER_CHOICES, required=False)
-    model = forms.ChoiceField(choices=MODEL_CHOICES, required=False)
-    thinking_level = forms.ChoiceField(choices=THINKING_CHOICES, required=False)
+    provider = DynamicChoiceField(choices_func=get_provider_choices, required=False, widget=forms.Select(attrs={'class': 'form-select'}))
+    model = DynamicChoiceField(choices_func=get_model_choices, required=False, widget=forms.Select(attrs={'class': 'form-select'}))
+    thinking_level = forms.ChoiceField(choices=THINKING_CHOICES, required=False, widget=forms.Select(attrs={'class': 'form-select'}))
 
     class Meta:
         model = UserPiSettings
