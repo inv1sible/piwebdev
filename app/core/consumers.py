@@ -15,6 +15,7 @@ class PiConsumer(AsyncWebsocketConsumer):
         self._pi_reader = None
         self._pi_writer = None
         self.session = None
+        self._last_user_prompt = None
         self.user = self.scope["user"]
         if not self.user.is_authenticated:
             await self.close(code=4401)
@@ -47,12 +48,23 @@ class PiConsumer(AsyncWebsocketConsumer):
             msg = (data.get("message") or "").strip()
             if not msg:
                 return
+            self._last_user_prompt = msg
             await self.store_message("user", msg)
             await self.send_json({"type": "message", "role": "user", "content": msg})
             # Signal that agent is starting to work
             await self.send_json({"type": "status", "message": "agent working", "working": True})
-            payload = {"type": "prompt", "message": await self.build_prompt(msg), "streamingBehavior": "followUp"}
+            payload = {"type": "prompt", "message": msg, "streamingBehavior": "followUp"}
             await self.write_pi(payload)
+        elif data.get("type") == "retry_with_fallback":
+            provider = data.get("provider", "")
+            model = data.get("model", "")
+            prompt = data.get("prompt") or self._last_user_prompt
+            if not provider or not model or not prompt:
+                return
+            await self.send_json({"type": "status", "message": f"switching to {model}…", "working": True})
+            await self.write_pi({"type": "set_model", "provider": provider, "modelId": model, "id": "wb-setmodel"})
+            self._pending_set_model = {"provider": provider, "model": model}
+            self._pending_retry_prompt = prompt
         elif data.get("type") == "checkpoint":
             label = (data.get("label") or "").strip()[:80] or "Checkpoint"
             await self.store_message("system", label, {"type": "checkpoint"})
@@ -60,6 +72,14 @@ class PiConsumer(AsyncWebsocketConsumer):
         elif data.get("type") == "abort":
             await self.send_json({"type": "status", "message": "stopping…", "working": True})
             await self.write_pi({"type": "abort"})
+        elif data.get("type") == "compact":
+            await self.send_json({"type": "status", "message": "compacting…", "working": True})
+            payload = {"type": "compact", "id": "wb-compact"}
+            if data.get("instructions"):
+                payload["customInstructions"] = data["instructions"]
+            await self.write_pi(payload)
+        elif data.get("type") == "get_stats":
+            await self.write_pi({"type": "get_session_stats", "id": "wb-stats"})
 
     async def start_pi(self):
         cfg = await self.resolve_settings()
@@ -73,6 +93,8 @@ class PiConsumer(AsyncWebsocketConsumer):
             pi_args += ["--model", cfg["model"]]
         if cfg["thinking_level"]:
             pi_args += ["--thinking", cfg["thinking_level"]]
+        if not cfg.get("use_context_files", True):
+            pi_args.append("--no-context-files")
         if cfg["extra_args"]:
             pi_args += shlex.split(cfg["extra_args"])
 
@@ -113,11 +135,25 @@ class PiConsumer(AsyncWebsocketConsumer):
 
         await self.mark_running(cfg)
 
+        # --continue resumes the provider/model stored in the JSONL, ignoring CLI flags.
+        # If the desired provider/model differs from what's in the JSONL, send set_model.
+        is_continuing = "--continue" in pi_args
+        if is_continuing:
+            jsonl_provider, jsonl_model = await database_sync_to_async(self._jsonl_provider)(session_dir)
+            model_changed = bool(
+                cfg["provider"] and cfg["model"] and (
+                    (jsonl_provider and jsonl_provider != cfg["provider"]) or
+                    (jsonl_model and jsonl_model != cfg["model"])
+                )
+            )
+        else:
+            model_changed = False
+        self._pending_set_model = cfg if model_changed else None
+
         replay_count = 0
         if hs.get("status") == "resuming":
             replay_count = hs.get("buffered", 0)
             if replay_count:
-                # Buffered events exist — agent was actively working while offline
                 await self.send_json({
                     "type": "status",
                     "message": f"resumed — catching up ({replay_count} event{'s' if replay_count != 1 else ''})",
@@ -126,8 +162,6 @@ class PiConsumer(AsyncWebsocketConsumer):
                     "provider": cfg["provider"],
                 })
             else:
-                # Pi process alive but idle (e.g. followUp mode waiting for next prompt)
-                # Reconnect silently — identical to a fresh start
                 await self.send_json({
                     "type": "status",
                     "message": "pi ready",
@@ -146,11 +180,21 @@ class PiConsumer(AsyncWebsocketConsumer):
                 "provider": cfg["provider"],
             })
 
+        # Send set_model RPC now — read_stdout will handle the response
+        if model_changed:
+            await self.write_pi({
+                "type": "set_model",
+                "provider": cfg["provider"],
+                "modelId": cfg["model"],
+                "id": "wb-setmodel",
+            })
+
         asyncio.create_task(self.read_stdout(replay_count=replay_count))
 
     async def read_stdout(self, replay_count: int = 0):
         assistant = ""
         n = 0  # events processed so far
+        agent_running = False  # True between agent_start and agent_end
         try:
             while self._pi_reader and not self._pi_reader.at_eof():
                 line = await self._pi_reader.readline()
@@ -165,10 +209,44 @@ class PiConsumer(AsyncWebsocketConsumer):
                         await self.send_json({"type": "tool", "content": line.decode(errors="replace")})
                     continue
 
+                t = event.get("type")
+                # RPC responses use {"type":"response","id":"...","success":true,"data":{...}}
+                if event.get("type") == "response" and event.get("id") == "wb-setmodel":
+                    pms = self._pending_set_model
+                    self._pending_set_model = None
+                    retry_prompt = getattr(self, "_pending_retry_prompt", None)
+                    self._pending_retry_prompt = None
+                    if event.get("success") and pms:
+                        if retry_prompt:
+                            # Fire the stored prompt with the new model
+                            await self.send_json({"type": "status", "message": "agent working", "working": True,
+                                                  "model": pms["model"], "provider": pms["provider"]})
+                            await self.write_pi({"type": "prompt", "message": retry_prompt, "streamingBehavior": "followUp"})
+                        else:
+                            await self.send_json({
+                                "type": "status", "message": "pi ready", "working": False,
+                                "model": pms["model"], "provider": pms["provider"],
+                            })
+                    else:
+                        err = (event.get("data") or {}) if isinstance(event.get("data"), dict) else event.get("data", "unknown")
+                        await self.send_json({"type": "stderr", "content": f"Model switch failed: {err}\n"})
+                    continue
+                if event.get("type") == "response" and event.get("id") == "wb-compact":
+                    await self.send_json({"type": "compact_done", "result": event.get("data") or {}})
+                    await self.send_json({"type": "status", "message": "idle", "working": False})
+                    continue
+                if event.get("type") == "response" and event.get("id") == "wb-stats":
+                    await self.send_json({"type": "session_stats", "stats": event.get("data") or {}})
+                    continue
+
+                if t == "agent_start":
+                    agent_running = True
+                elif t == "agent_end":
+                    agent_running = False
+
                 if not is_replay:
                     await self.send_json({"type": "pi", "event": event})
 
-                t = event.get("type")
                 if t == "message_update":
                     d = event.get("assistantMessageEvent") or {}
                     if d.get("type") == "text_delta":
@@ -194,6 +272,25 @@ class PiConsumer(AsyncWebsocketConsumer):
         except Exception:
             pass
         finally:
+            if agent_running:
+                # Pi exited mid-task without agent_end — likely an API error (quota, bad key, etc.)
+                cfg = await self.resolve_settings()
+                fallback = await database_sync_to_async(self._find_fallback)(
+                    cfg["provider"], cfg["model"]
+                )
+                await self.send_json({
+                    "type": "task_failed",
+                    "reason": "provider_exit",
+                    "provider": cfg["provider"],
+                    "model": cfg["model"],
+                    "hint": (
+                        f"Provider '{cfg['provider']}' stopped responding mid-task. "
+                        "Common causes: API quota exceeded (rate limit), invalid API key, "
+                        "or a network error. Check your credentials in Settings → Providers."
+                    ),
+                    "fallback": fallback,
+                    "last_prompt": self._last_user_prompt,
+                })
             await self.send_json({"type": "status", "message": "idle", "working": False})
 
     async def write_pi(self, payload):
@@ -239,51 +336,66 @@ class PiConsumer(AsyncWebsocketConsumer):
             "provider": project_cfg.provider or user_cfg.provider or settings.DEFAULT_PI_PROVIDER,
             "model": project_cfg.model or user_cfg.model or settings.DEFAULT_PI_MODEL,
             "thinking_level": project_cfg.thinking_level or user_cfg.thinking_level or settings.DEFAULT_PI_THINKING,
-            "mindset": "\n".join(x for x in [user_cfg.mindset, project_cfg.mindset] if x),
-            "inject_memory": project_cfg.inject_memory,
+            "use_context_files": project_cfg.use_context_files and user_cfg.use_context_files,
             "extra_args": " ".join(x for x in [user_cfg.extra_args, project_cfg.extra_args] if x),
         }
 
-    @database_sync_to_async
-    def build_prompt(self, msg):
-        cfg = ProjectPiSettings.objects.get_or_create(project=self.session.project)[0]
-        parts = []
-        # Always inject MEMORY.md — it is the project's persistent context
-        memory_file = Path(self.session.project.path) / "MEMORY.md"
-        if memory_file.exists():
-            memory_content = memory_file.read_text(encoding="utf-8").strip()
-        else:
-            memory_content = "# General Memory\n\n\n# Todos\n\n\n# Ideas For Later"
-        parts.append(
-            "Project memory (MEMORY.md in the project root):\n"
-            + memory_content
-            + "\n\n"
-            "IMPORTANT: After successfully completing this task, update MEMORY.md to reflect "
-            "what you learned — architecture decisions, conventions, solved problems, gotchas. "
-            "This file is committed to git and is your only persistent memory across sessions."
-        )
-        if cfg.mindset:
-            parts.append("Project mindset/flavour:\n" + cfg.mindset)
-        parts.append(
-            "Workflow — always follow these steps in order before writing any code:\n"
-            "1. Understand – Restate the task briefly in your own words to confirm you grasp it.\n"
-            "2. Explore – Read the relevant source files. Map what exists before touching anything.\n"
-            "3. Clarify – If anything is ambiguous, ask specific questions and STOP. Wait for the user's answers before proceeding.\n"
-            "4. Plan – State exactly which files you will change and how.\n"
-            "5. Code – Only after steps 1-4 are complete, make the actual edits."
-        )
-        parts.append("User request:\n" + msg)
-        return "\n\n---\n\n".join(parts)
+    def _jsonl_provider(self, session_dir: str):
+        """Return (provider, model) that the JSONL session was last using, or (None, None)."""
+        try:
+            jsonl_files = sorted(Path(session_dir).glob("*.jsonl"))
+            if not jsonl_files:
+                return None, None
+            last_provider = last_model = None
+            with open(jsonl_files[-1]) as f:
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                        if d.get("type") == "model_change":
+                            last_provider = d.get("provider")
+                            last_model = d.get("model")
+                    except Exception:
+                        pass
+            return last_provider, last_model
+        except Exception:
+            return None, None
+
+    def _find_fallback(self, current_provider: str, current_model: str):
+        """Return {provider, model} for a fallback if one is configured, else None."""
+        import os
+        from .utils import get_pi_models_config
+        auth_path = os.environ.get("PI_AUTH_JSON", "")
+        pi_agent_dir = Path(auth_path).parent if auth_path else (Path.home() / ".pi" / "agent")
+        auth_file = pi_agent_dir / "auth.json"
+        if not auth_file.exists():
+            return None
+        try:
+            auth = json.loads(auth_file.read_text())
+        except Exception:
+            return None
+        catalog = get_pi_models_config()
+        providers = catalog.get("providers", {})
+        # Priority order — prefer local providers as fallback
+        priority = ["ollama", "anthropic", "openai-codex", "openai", "groq", "openrouter"]
+        for prov in priority:
+            if prov == current_provider:
+                continue
+            if prov not in auth:
+                continue
+            raw_models = (providers.get(prov) or {}).get("models", [])
+            if isinstance(raw_models, dict):
+                models = list(raw_models.keys())
+            else:
+                models = [m.get("id") for m in raw_models if isinstance(m, dict) and m.get("id")]
+            if models:
+                return {"provider": prov, "model": models[0]}
+        return None
 
     @database_sync_to_async
     def mark_running(self, cfg):
         self.session.status = "running"
-        self.session.provider = cfg["provider"]
-        self.session.model = cfg["model"]
-        self.session.thinking_level = cfg["thinking_level"]
-        self.session.mindset = cfg["mindset"]
         self.session.last_started_at = timezone.now()
-        self.session.save()
+        self.session.save(update_fields=["status", "last_started_at", "updated_at"])
 
     @database_sync_to_async
     def mark_stopped(self):

@@ -8,11 +8,21 @@
       <p class="muted small">{{ project.path }}</p>
       <p class="status" id="wsStatus">offline</p>
       <div class="runtime-bar" id="runtimeBar"></div>
+      <div id="ctxUsage" style="display:none;margin-top:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+          <span class="muted small">Context</span>
+          <span id="ctxPct" style="font-size:11px;font-weight:700;font-family:ui-monospace,monospace"></span>
+        </div>
+        <div class="ctx-bar"><div id="ctxFill" class="ctx-fill" style="width:0%"></div></div>
+        <div id="ctxRemaining" class="muted small" style="margin-top:2px;text-align:right"></div>
+      </div>
     </div>
     <div class="actions">
       <a class="button secondary" href="{% url 'project_rename' project.pk %}">Rename</a>
       <a class="button secondary" href="{% url 'project_memory' project.pk %}">Memory</a>
+      <button class="button secondary" id="agentsBtn">AGENTS.md</button>
       <a class="button secondary" href="{% url 'project_settings' project.pk %}">Pi settings</a>
+      <button class="button secondary" id="statsBtn" title="Session token stats">Stats</button>
       <form method="post" action="{% url 'session_clear' session.pk %}" onsubmit="return confirm('Clear all messages? This cannot be undone.')">{% csrf_token %}<button type="submit" class="button secondary">Clear chat</button></form>
     </div>
     <div class="card compact">
@@ -35,6 +45,7 @@
       <span class="status chat-status" id="wsStatusCompact">offline</span>
       <button class="secondary icon" id="focusBtn" title="Focus — collapse completed tasks">◎</button>
       <button class="secondary icon" id="ackBtn" title="Acknowledge — collapse history and update memory">✓ Ack</button>
+      <button class="secondary icon" id="compactBtn" title="Compact session context">⊟ Compact</button>
       <button class="secondary icon" id="abortBtn" title="Abort current task" style="display:none">■ Stop</button>
       <button class="secondary icon pane-arrow" data-collapse="right" title="Toggle files pane">→</button>
     </div>
@@ -143,6 +154,25 @@
     <div class="modal-foot">
       <button id="memorySave">Save</button>
       <button class="secondary" id="memoryCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="agentsModal">
+  <div class="modal-box">
+    <div class="modal-head"><strong>AGENTS.md</strong><span class="muted small">Instructions for pi when starting this project</span></div>
+    <textarea id="agentsContent" class="editor" spellcheck="false"></textarea>
+    <div class="modal-foot">
+      <button id="agentsSave">Save</button>
+      <button class="secondary" id="agentsCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="statsModal">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-head"><strong>Session stats</strong></div>
+    <div id="statsContent" style="padding:12px 0;font-size:13px;line-height:1.8"></div>
+    <div class="modal-foot">
+      <button class="secondary" id="statsClose">Close</button>
     </div>
   </div>
 </div>

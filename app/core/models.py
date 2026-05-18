@@ -32,8 +32,8 @@ class UserPiSettings(models.Model):
     provider = models.CharField(max_length=120, default=settings.DEFAULT_PI_PROVIDER)
     model = models.CharField(max_length=160, default=settings.DEFAULT_PI_MODEL)
     thinking_level = models.CharField(max_length=40, default=settings.DEFAULT_PI_THINKING)
-    mindset = models.TextField(blank=True, default="")
     extra_args = models.CharField(max_length=500, blank=True, default="")
+    use_context_files = models.BooleanField(default=True)
     terminal_access = models.BooleanField(default=False)
 
 
@@ -42,8 +42,7 @@ class ProjectPiSettings(models.Model):
     provider = models.CharField(max_length=120, blank=True, default="")
     model = models.CharField(max_length=160, blank=True, default="")
     thinking_level = models.CharField(max_length=40, blank=True, default="")
-    mindset = models.TextField(blank=True, default="")
-    inject_memory = models.BooleanField(default=True)
+    use_context_files = models.BooleanField(default=True)
     extra_args = models.CharField(max_length=500, blank=True, default="")
 
 
@@ -57,7 +56,6 @@ class PiSession(models.Model):
     provider = models.CharField(max_length=120, blank=True, default="")
     model = models.CharField(max_length=160, blank=True, default="")
     thinking_level = models.CharField(max_length=40, blank=True, default="")
-    mindset = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_started_at = models.DateTimeField(null=True, blank=True)

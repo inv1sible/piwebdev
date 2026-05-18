@@ -1,0 +1,519 @@
+{% extends 'core/base.html' %}
+{% block title %}Settings — π webui{% endblock %}
+{% block content %}
+<section class="wrap" style="max-width:780px">
+  <div class="card" style="padding:0;overflow:hidden">
+    <div class="tabs" style="border-bottom:1px solid var(--border,#2a2f3a);margin:0;padding:0 16px">
+      <button data-tab="keys" class="active" style="padding:14px 18px">API Keys</button>
+      <button data-tab="providers" style="padding:14px 18px">Providers</button>
+      <button data-tab="context" style="padding:14px 18px">Context files</button>
+      <button data-tab="prefs" style="padding:14px 18px">Preferences</button>
+    </div>
+
+    <div id="msg" style="display:none;padding:10px 20px;font-size:13px;border-bottom:1px solid var(--border,#2a2f3a)"></div>
+
+    <!-- ── API KEYS ── -->
+    <div id="tab-keys" class="tab-pane" style="padding:20px">
+      <p class="muted small" style="margin:0 0 16px">API keys are stored in <code>~/.pi/agent/auth.json</code>. Keys are never sent to the browser in plain text.</p>
+      <div id="keyList" style="display:grid;gap:10px"></div>
+    </div>
+
+    <!-- ── PROVIDERS ── -->
+    <div id="tab-providers" class="tab-pane hidden" style="padding:20px">
+      <p class="muted small" style="margin:0 0 4px">The model catalog controls what appears in project provider/model dropdowns.</p>
+
+      <div id="provNotConfigured" style="display:none;margin-bottom:16px">
+        <div class="pill" style="background:var(--tool-bg,#1a1f27);border:1px solid var(--accent)">
+          <strong>PI_MODELS_JSON_PATH</strong> is not set — add it to <code>.env</code> and restart.
+          <pre style="margin:6px 0 0;font-size:12px">PI_MODELS_JSON_PATH=/var/opt/piwebdev/models.json</pre>
+        </div>
+      </div>
+
+      <!-- Pi install catalog (read-only) -->
+      <div id="piCatalogSection" style="display:none;margin-bottom:16px">
+        <details id="piCatalogDetails">
+          <summary style="cursor:pointer;font-size:13px;font-weight:600;padding:8px 0;user-select:none">
+            Pi agent catalog <span class="muted" style="font-weight:400">(read-only)</span>
+          </summary>
+          <p class="muted small" id="piCatalogPath" style="margin:4px 0 8px"></p>
+          <div id="piCatalogList" style="display:grid;gap:6px"></div>
+        </details>
+      </div>
+
+      <div id="provEditor" style="display:none">
+        <p class="muted small" id="provPath" style="margin:0 0 12px"></p>
+
+        <h3 style="margin:0 0 8px;font-size:13px">Import from Ollama</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
+          <div><label class="small muted" style="display:block;margin-bottom:4px">Ollama URL</label>
+            <input id="ollamaUrl" type="text" value="http://localhost:11434" style="width:220px"></div>
+          <button id="ollamaFetch" class="secondary" type="button">Fetch models</button>
+        </div>
+        <div id="ollamaModels" style="display:none;margin-bottom:12px">
+          <p class="muted small" style="margin:0 0 6px">Select models to add under <code>ollama</code>:</p>
+          <div id="ollamaModelList" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+          <button id="ollamaAdd" class="secondary" type="button">Add selected</button>
+        </div>
+
+        <h3 style="margin:0 0 8px;font-size:13px">Quick-add model</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-end">
+          <div><label class="small muted" style="display:block;margin-bottom:4px">Provider</label>
+            <select id="qaProvider" class="form-select" style="min-width:150px">
+              <option value="anthropic">anthropic</option>
+              <option value="openai">openai</option>
+              <option value="openai-codex">openai-codex</option>
+              <option value="google">google (Gemini)</option>
+              <option value="ollama">ollama</option>
+              <option value="openrouter">openrouter</option>
+              <option value="xai">xai</option>
+              <option value="deepseek">deepseek</option>
+              <option value="groq">groq</option>
+              <option value="mistral">mistral</option>
+              <option value="fireworks">fireworks</option>
+              <option value="_custom">— custom —</option>
+            </select></div>
+          <div id="qaCustomWrap" style="display:none">
+            <label class="small muted" style="display:block;margin-bottom:4px">Custom provider</label>
+            <input id="qaCustom" type="text" placeholder="my-provider" style="width:140px"></div>
+          <div><label class="small muted" style="display:block;margin-bottom:4px">Model ID</label>
+            <input id="qaModel" type="text" placeholder="e.g. gemini-2.5-pro" style="width:200px"></div>
+          <div><label class="small muted" style="display:block;margin-bottom:4px">Reasoning?</label>
+            <input id="qaReasoning" type="checkbox" style="width:auto;margin-top:6px"></div>
+          <button id="qaAdd" class="secondary" type="button">Add</button>
+        </div>
+
+        <h3 style="margin:0 0 6px;font-size:13px">Raw JSON <span class="muted" style="font-weight:400;font-size:12px">— piwebdev editable catalog</span></h3>
+        <textarea id="provJson" rows="14" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5"></textarea>
+        <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          <button id="provSave" type="button">Save catalog</button>
+          <button id="provImportPi" class="secondary" type="button">← Import all from pi</button>
+          <span class="muted small">Merges pi's built-in models into the catalog above</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CONTEXT FILES ── -->
+    <div id="tab-context" class="tab-pane hidden" style="padding:20px">
+      <p class="muted small" style="margin:0 0 4px">Global context files in <code>~/.pi/agent/</code>. Pi loads these for <strong>every</strong> session, before project-level files.</p>
+      <p class="muted small" style="margin:0 0 16px">Pi's load order: <code>~/.pi/agent/AGENTS.md</code> → parent dirs → <code>&lt;project&gt;/AGENTS.md</code> (most specific last).</p>
+
+      <div style="display:grid;gap:20px;max-width:700px">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label class="small muted" style="font-weight:600">AGENTS.md <span style="font-weight:400">(global)</span></label>
+            <span id="globalAgentsPath" class="muted small"></span>
+          </div>
+          <textarea id="globalAgents" rows="12" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5" placeholder="Global instructions for all pi sessions…"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button id="globalAgentsSave" type="button">Save AGENTS.md</button>
+          </div>
+        </div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label class="small muted" style="font-weight:600">CLAUDE.md <span style="font-weight:400">(global)</span></label>
+            <span id="globalClaudePath" class="muted small"></span>
+          </div>
+          <textarea id="globalClaude" rows="12" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5" placeholder="Alternative global context file (pi loads whichever it finds first per directory)…"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button id="globalClaudeSave" type="button">Save CLAUDE.md</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PREFERENCES ── -->
+    <div id="tab-prefs" class="tab-pane hidden" style="padding:20px">
+      <p class="muted small" style="margin:0 0 16px">Default provider/model used when a project has no specific setting.</p>
+      <div style="display:grid;gap:16px;max-width:480px">
+        <label>
+          <span class="small muted" style="display:block;margin-bottom:4px">Provider</span>
+          <select id="prefProvider" class="form-select" style="width:100%"></select>
+        </label>
+        <label>
+          <span class="small muted" style="display:block;margin-bottom:4px">Model</span>
+          <select id="prefModel" class="form-select" style="width:100%"></select>
+        </label>
+        <label>
+          <span class="small muted" style="display:block;margin-bottom:4px">Thinking level</span>
+          <select id="prefThinking" class="form-select" style="width:100%">
+            <option value="">— default —</option>
+            <option value="none">none</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="max">max</option>
+          </select>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="prefContextFiles" style="width:auto">
+          <span class="small">Load AGENTS.md / CLAUDE.md context files</span>
+        </label>
+        <label>
+          <span class="small muted" style="display:block;margin-bottom:4px">Extra pi CLI arguments</span>
+          <input id="prefExtraArgs" type="text" placeholder="e.g. --max-tokens 8192">
+        </label>
+        <div><button id="prefSave">Save preferences</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+.tab-pane{display:block}
+.tab-pane.hidden{display:none}
+.tabs button{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--muted,#888);cursor:pointer;font-size:13px;font-weight:500;margin-bottom:-1px}
+.tabs button.active{color:var(--fg,#e0e0e0);border-bottom-color:var(--accent,#72f1b8)}
+.provider-card{display:grid;grid-template-columns:1fr auto;align-items:start;gap:8px;padding:12px 14px;border:1px solid var(--border,#2a2f3a);border-radius:8px;background:var(--card-bg,#161b22)}
+.provider-card.is-set{border-color:var(--accent,#72f1b8)}
+.prov-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#444;margin-top:3px}
+.prov-dot.set{background:#72f1b8}.prov-dot.oauth{background:#f1c40f}
+.prov-form{grid-column:1/-1;display:none;padding-top:10px;border-top:1px solid var(--border,#2a2f3a);margin-top:4px}
+.prov-form.open{display:block}
+.prov-form input{width:100%;margin-bottom:8px;font-family:ui-monospace,monospace;font-size:13px}
+</style>
+
+<script>
+(function(){
+  const msg = document.getElementById('msg');
+
+  function showMsg(text, ok) {
+    msg.textContent = text;
+    msg.style.display = 'block';
+    msg.style.background = ok ? 'rgba(114,241,184,.1)' : 'rgba(255,60,60,.1)';
+    msg.style.color = ok ? '#72f1b8' : '#f88';
+    if (ok) setTimeout(() => msg.style.display = 'none', 3000);
+  }
+
+  function csrf() {
+    return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
+  }
+
+  async function post(url, body) {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrf()}, body: JSON.stringify(body)});
+    return r.json();
+  }
+
+  // ── TABS ──
+  const tabs = document.querySelectorAll('.tabs button');
+  const panes = document.querySelectorAll('.tab-pane');
+  function showTab(name) {
+    tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    panes.forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name));
+    location.hash = name;
+    if (name === 'keys' && !keysLoaded) loadKeys();
+    if (name === 'providers' && !provLoaded) loadProviders();
+    if (name === 'context' && !ctxLoaded) loadContext();
+    if (name === 'prefs' && !prefsLoaded) loadPrefs();
+  }
+  tabs.forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+  const initTab = (['keys','providers','context','prefs'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'keys');
+
+  // ── API KEYS ──
+  let keysLoaded = false;
+  const keyList = document.getElementById('keyList');
+
+  function renderKeyCard(p) {
+    const card = document.createElement('div');
+    card.className = 'provider-card' + (p.status === 'set' ? ' is-set' : '');
+    const dotCls = p.status==='set'?'set':p.status==='oauth'?'oauth':'';
+    const meta = p.status==='set' ? `Key set · <code>${p.key_preview}</code>`
+               : p.status==='oauth' ? 'OAuth — managed by <code>pi login</code>'
+               : p.no_key ? 'No key required' : '<span style="color:#f88">Not configured</span>';
+    let btns = '';
+    if (p.oauth_only || p.status==='oauth') btns = '<span class="muted small">pi&nbsp;login</span>';
+    else if (p.no_key) btns = '';
+    else if (p.status==='set') btns = `<button class="secondary" data-a="edit" style="font-size:12px">Update</button><button class="secondary" data-a="del" style="font-size:12px;color:#f88">Remove</button>`;
+    else btns = `<button data-a="edit" style="font-size:12px">Add key</button>`;
+
+    card.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        <span class="prov-dot ${dotCls}"></span>
+        <div><strong style="font-size:13px">${p.name}</strong><div class="muted small" style="margin-top:2px">${meta}</div></div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">${btns}</div>
+      ${(!p.oauth_only && !p.no_key && p.status!=='oauth') ? `
+      <div class="prov-form" id="kf-${p.id}">
+        <input type="password" id="ki-${p.id}" placeholder="Paste API key…" autocomplete="off" spellcheck="false">
+        <div style="display:flex;gap:8px"><button data-a="save" style="font-size:12px">Save</button><button class="secondary" data-a="cancel" style="font-size:12px">Cancel</button></div>
+      </div>` : ''}`;
+
+    card.addEventListener('click', async e => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (!a) return;
+      const form = document.getElementById('kf-' + p.id);
+      const inp = document.getElementById('ki-' + p.id);
+      if (a==='edit') { form?.classList.add('open'); inp?.focus(); }
+      else if (a==='cancel') { form?.classList.remove('open'); if(inp) inp.value=''; }
+      else if (a==='save') {
+        const key = inp?.value.trim();
+        if (!key) { showMsg('Paste a key first.', false); return; }
+        const d = await post('/api/auth/', {provider: p.id, key, action: 'set'});
+        if (d.ok) { showMsg(p.name + ' key saved.', true); loadKeys(); }
+        else showMsg(d.error || 'Save failed', false);
+      } else if (a==='del') {
+        if (!confirm('Remove key for ' + p.name + '?')) return;
+        const d = await post('/api/auth/', {provider: p.id, action: 'delete'});
+        if (d.ok) { showMsg(p.name + ' key removed.', true); loadKeys(); }
+        else showMsg(d.error || 'Remove failed', false);
+      }
+    });
+    card.querySelector('#ki-' + p.id)?.addEventListener('keydown', e => {
+      if (e.key==='Enter') card.querySelector('[data-a="save"]')?.click();
+    });
+    return card;
+  }
+
+  async function loadKeys() {
+    keysLoaded = true;
+    try {
+      const d = await (await fetch('/api/auth/')).json();
+      keyList.innerHTML = '';
+      d.providers.forEach(p => keyList.appendChild(renderKeyCard(p)));
+    } catch(e) { showMsg('Failed to load keys: ' + e.message, false); }
+  }
+
+  // ── PROVIDERS ──
+  let provLoaded = false, provConfig = null, piCatalogData = null;
+  const provJson = document.getElementById('provJson');
+
+  async function loadProviders() {
+    provLoaded = true;
+    try {
+      const r = await fetch('/api/models/config/');
+      const d = await r.json();
+
+      // Always render pi's catalog if present (even when editable catalog isn't configured)
+      if (d.pi_catalog && Object.keys(d.pi_catalog.providers || {}).length) {
+        piCatalogData = d.pi_catalog;
+        renderPiCatalog(d.pi_catalog, d.pi_catalog_path);
+      }
+
+      if (r.status === 400) {
+        document.getElementById('provNotConfigured').style.display = 'block';
+        return;
+      }
+      provConfig = d.config;
+      provJson.value = JSON.stringify(d.config, null, 2);
+      document.getElementById('provPath').textContent = 'File: ' + d.path;
+      document.getElementById('provEditor').style.display = 'block';
+    } catch(e) { showMsg('Failed to load catalog: ' + e.message, false); }
+  }
+
+  document.getElementById('provImportPi')?.addEventListener('click', () => {
+    if (!piCatalogData) { showMsg('Pi catalog not loaded yet.', false); return; }
+    let config;
+    try { config = JSON.parse(provJson.value); } catch(e) { config = {providers: {}}; }
+    if (!config.providers) config.providers = {};
+    const src = piCatalogData.providers || {};
+    Object.entries(src).forEach(([pid, pcfg]) => {
+      if (!config.providers[pid]) config.providers[pid] = {models: []};
+      // Merge connection-level fields (baseUrl, api, apiKey) if not already present
+      ['baseUrl', 'api', 'apiKey'].forEach(k => {
+        if (pcfg[k] && !config.providers[pid][k]) config.providers[pid][k] = pcfg[k];
+      });
+      const existing = new Set(config.providers[pid].models.map(m => m.id));
+      (pcfg.models || []).forEach(m => {
+        if (m.id && !existing.has(m.id)) {
+          config.providers[pid].models.push(m);
+          existing.add(m.id);
+        }
+      });
+    });
+    provJson.value = JSON.stringify(config, null, 2);
+    showMsg('Pi models merged into catalog — click Save to persist.', true);
+  });
+
+  function renderPiCatalog(catalog, path) {
+    document.getElementById('piCatalogSection').style.display = 'block';
+    document.getElementById('piCatalogPath').textContent = 'From: ' + (path || '~/.pi/agent/models.json');
+    const list = document.getElementById('piCatalogList');
+    list.innerHTML = '';
+    const providers = catalog.providers || {};
+    Object.entries(providers).sort(([a],[b])=>a.localeCompare(b)).forEach(([pid, pcfg]) => {
+      const models = pcfg.models || [];
+      const meta = [];
+      if (pcfg.baseUrl) meta.push('baseUrl: ' + pcfg.baseUrl);
+      if (pcfg.api) meta.push('api: ' + pcfg.api);
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:8px 12px;border:1px solid var(--border,#2a2f3a);border-radius:6px;background:var(--tool-bg,#1a1f27)';
+      row.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
+        <strong style="font-size:13px">${pid}</strong>
+        <span class="muted small">${models.length} model${models.length!==1?'s':''}</span>
+      </div>
+      ${meta.length ? `<div class="muted small" style="margin-top:3px">${meta.join(' · ')}</div>` : ''}
+      ${models.length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">${
+        models.map(m=>`<span style="font-size:11px;padding:2px 7px;border-radius:4px;background:var(--border,#2a2f3a)">${m.id}${m.reasoning?' [R]':''}</span>`).join('')
+      }</div>` : ''}`;
+      list.appendChild(row);
+    });
+  }
+
+  document.getElementById('provSave')?.addEventListener('click', async () => {
+    let config;
+    try { config = JSON.parse(provJson.value); } catch(e) { showMsg('Invalid JSON: ' + e.message, false); return; }
+    const d = await post('/api/models/config/', {config});
+    if (d.ok) { showMsg('Catalog saved.', true); provConfig = config; }
+    else showMsg(d.error || 'Save failed', false);
+  });
+
+  document.getElementById('qaProvider')?.addEventListener('change', function() {
+    document.getElementById('qaCustomWrap').style.display = this.value==='_custom'?'block':'none';
+  });
+
+  document.getElementById('qaAdd')?.addEventListener('click', () => {
+    const pSel = document.getElementById('qaProvider');
+    const prov = pSel.value==='_custom' ? document.getElementById('qaCustom').value.trim() : pSel.value;
+    const model = document.getElementById('qaModel').value.trim();
+    if (!prov || !model) { showMsg('Provider and model ID are required.', false); return; }
+    let config;
+    try { config = JSON.parse(provJson.value); } catch(e) { showMsg('Fix JSON errors first: ' + e.message, false); return; }
+    if (!config.providers) config.providers = {};
+    if (!config.providers[prov]) config.providers[prov] = {models: []};
+    const entry = {id: model};
+    if (document.getElementById('qaReasoning').checked) entry.reasoning = true;
+    config.providers[prov].models.push(entry);
+    provJson.value = JSON.stringify(config, null, 2);
+    document.getElementById('qaModel').value = '';
+    document.getElementById('qaReasoning').checked = false;
+  });
+
+  document.getElementById('ollamaFetch')?.addEventListener('click', async () => {
+    const base = document.getElementById('ollamaUrl').value.replace(/\/$/, '');
+    const btn = document.getElementById('ollamaFetch');
+    btn.disabled = true; btn.textContent = 'Fetching…';
+    try {
+      const r = await fetch('/api/ollama/tags/?url=' + encodeURIComponent(base));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const models = (d.models||[]).map(m=>m.name||m.model).filter(Boolean);
+      if (!models.length) { showMsg('No models found in Ollama.', false); return; }
+      const list = document.getElementById('ollamaModelList');
+      list.innerHTML = models.map(m =>
+        `<label style="display:flex;align-items:center;gap:4px;background:var(--tool-bg,#1a1f27);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px">
+          <input type="checkbox" value="${m}" checked style="width:auto"> ${m}</label>`).join('');
+      document.getElementById('ollamaModels').style.display = 'block';
+    } catch(e) { showMsg('Cannot reach Ollama at ' + base + ': ' + e.message, false); }
+    finally { btn.disabled = false; btn.textContent = 'Fetch models'; }
+  });
+
+  document.getElementById('ollamaAdd')?.addEventListener('click', () => {
+    const selected = [...document.querySelectorAll('#ollamaModelList input:checked')].map(i=>i.value);
+    if (!selected.length) return;
+    let config;
+    try { config = JSON.parse(provJson.value); } catch(e) { showMsg('Fix JSON errors first.', false); return; }
+    if (!config.providers) config.providers = {};
+    if (!config.providers.ollama) config.providers.ollama = {models: []};
+    const existing = new Set(config.providers.ollama.models.map(m=>m.id));
+    selected.filter(m=>!existing.has(m)).forEach(m=>config.providers.ollama.models.push({id:m}));
+    provJson.value = JSON.stringify(config, null, 2);
+    document.getElementById('ollamaModels').style.display = 'none';
+  });
+
+  // ── CONTEXT FILES ──
+  let ctxLoaded = false;
+
+  async function loadContext() {
+    ctxLoaded = true;
+    for (const fname of ['AGENTS.md', 'CLAUDE.md']) {
+      const key = fname === 'AGENTS.md' ? 'globalAgents' : 'globalClaude';
+      try {
+        const d = await (await fetch('/api/global/context/?file=' + fname)).json();
+        document.getElementById(key).value = d.content || '';
+        const pathEl = document.getElementById(key + 'Path');
+        if (pathEl) pathEl.textContent = d.path || '';
+      } catch(e) { showMsg('Failed to load ' + fname + ': ' + e.message, false); }
+    }
+  }
+
+  async function saveGlobalContext(fname) {
+    const key = fname === 'AGENTS.md' ? 'globalAgents' : 'globalClaude';
+    const content = document.getElementById(key).value;
+    const d = await post('/api/global/context/', {file: fname, content});
+    if (d.ok) showMsg(fname + ' saved.', true);
+    else showMsg(d.error || 'Save failed', false);
+  }
+
+  document.getElementById('globalAgentsSave')?.addEventListener('click', () => saveGlobalContext('AGENTS.md'));
+  document.getElementById('globalClaudeSave')?.addEventListener('click', () => saveGlobalContext('CLAUDE.md'));
+
+  // ── PREFERENCES ──
+  let prefsLoaded = false;
+  let allModels = [], byProvider = {}, modelReasoning = {};
+
+  async function loadPrefs() {
+    prefsLoaded = true;
+    try {
+      const [modelsResp, prefsResp] = await Promise.all([fetch('/api/models/'), fetch('/api/user/prefs/')]);
+      const md = await modelsResp.json();
+      const pd = await prefsResp.json();
+      allModels = md.models || [];
+      byProvider = md.by_provider || {};
+      modelReasoning = md.model_reasoning || {};
+
+      const provSel = document.getElementById('prefProvider');
+      provSel.innerHTML = '<option value="">— any —</option>' + md.providers.map(([v,l]) => {
+        if (!v) return '';
+        const count = (md.by_provider[v] || []).length;
+        return `<option value="${v}">${l}${count ? ' (' + count + ')' : ''}</option>`;
+      }).join('');
+      provSel.value = pd.provider;
+
+      fillModels(pd.provider, pd.model, false);
+
+      document.getElementById('prefThinking').value = pd.thinking_level;
+      document.getElementById('prefContextFiles').checked = pd.use_context_files;
+      document.getElementById('prefExtraArgs').value = pd.extra_args;
+    } catch(e) { showMsg('Failed to load preferences: ' + e.message, false); }
+  }
+
+  function cascadePrefThinking(modelId) {
+    const thinkSel = document.getElementById('prefThinking');
+    if (!thinkSel || !modelId) return;
+    if (modelReasoning[modelId] === true) {
+      if (!thinkSel.value) thinkSel.value = 'minimal';
+    } else if (modelId && modelReasoning[modelId] === false) {
+      thinkSel.value = '';
+    }
+  }
+
+  function fillModels(provider, selectedModel, doCascade = true) {
+    const sel = document.getElementById('prefModel');
+    const provModels = byProvider[provider] || [];
+    if (provider && provModels.length) {
+      sel.innerHTML = '<option value="">— any —</option>' + provModels.map(m => `<option value="${m}">${m}</option>`).join('');
+    } else if (provider && !provModels.length) {
+      sel.innerHTML = `<option value="">— no models registered —</option>`;
+    } else {
+      sel.innerHTML = '<option value="">— any —</option>' + allModels.filter(([v])=>v).map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+    }
+    if (selectedModel) sel.value = selectedModel;
+    if (doCascade) cascadePrefThinking(sel.value);
+  }
+
+  document.getElementById('prefProvider')?.addEventListener('change', function() {
+    fillModels(this.value, '');
+  });
+
+  document.getElementById('prefModel')?.addEventListener('change', function() {
+    cascadePrefThinking(this.value);
+  });
+
+  document.getElementById('prefSave')?.addEventListener('click', async () => {
+    const d = await post('/api/user/prefs/', {
+      provider: document.getElementById('prefProvider').value,
+      model: document.getElementById('prefModel').value,
+      thinking_level: document.getElementById('prefThinking').value,
+      use_context_files: document.getElementById('prefContextFiles').checked,
+      extra_args: document.getElementById('prefExtraArgs').value,
+    });
+    if (d.ok) showMsg('Preferences saved.', true);
+    else showMsg(d.error || 'Save failed', false);
+  });
+
+  // ── INIT ──
+  showTab(initTab);
+})();
+</script>
+{% endblock %}

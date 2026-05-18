@@ -1,0 +1,145 @@
+{% extends 'core/base.html' %}
+{% block title %}API Keys — π webui{% endblock %}
+{% block content %}
+<section class="wrap narrow">
+  <div class="card">
+    <h1>Provider API Keys</h1>
+    <p class="muted small">Keys are stored in <code>~/.pi/agent/auth.json</code> and used by pi to authenticate with AI providers. Keys are never sent to the browser in plain text.</p>
+    <div id="authMsg" style="display:none;margin:12px 0;padding:10px 14px;border-radius:6px;font-size:13px"></div>
+    <div id="providerList" style="display:grid;gap:10px;margin-top:20px"></div>
+  </div>
+</section>
+
+<style>
+.provider-card{display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--border,#2a2f3a);border-radius:8px;background:var(--card-bg,#161b22)}
+.provider-card.is-set{border-color:var(--accent,#72f1b8)}
+.prov-info{display:flex;align-items:center;gap:12px}
+.prov-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;background:#444}
+.prov-dot.set{background:#72f1b8}
+.prov-dot.oauth{background:#f1c40f}
+.prov-name{font-weight:600;font-size:14px}
+.prov-meta{font-size:11px;color:var(--muted,#888);margin-top:2px}
+.prov-actions{display:flex;gap:8px;align-items:center}
+.prov-form{grid-column:1/-1;display:none;margin-top:8px;padding-top:12px;border-top:1px solid var(--border,#2a2f3a)}
+.prov-form.open{display:block}
+.prov-form input{width:100%;margin-bottom:8px;font-family:ui-monospace,monospace;font-size:13px}
+.prov-form-actions{display:flex;gap:8px}
+</style>
+
+<script>
+(function(){
+  const list = document.getElementById('providerList');
+  const msgEl = document.getElementById('authMsg');
+
+  function showMsg(text, ok) {
+    msgEl.textContent = text;
+    msgEl.style.display = 'block';
+    msgEl.style.background = ok ? 'rgba(114,241,184,.12)' : 'rgba(255,80,80,.12)';
+    msgEl.style.border = '1px solid ' + (ok ? '#72f1b8' : '#f05');
+    msgEl.style.color = ok ? '#72f1b8' : '#f88';
+    if (ok) setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+  }
+
+  function csrf() {
+    return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
+  }
+
+  function renderCard(p) {
+    const card = document.createElement('div');
+    card.className = 'provider-card' + (p.status === 'set' ? ' is-set' : '');
+    card.dataset.id = p.id;
+
+    const dotClass = p.status === 'set' ? 'set' : p.status === 'oauth' ? 'oauth' : '';
+    const metaText = p.status === 'set'
+      ? `Key set · ${p.key_preview}`
+      : p.status === 'oauth'
+      ? 'Authenticated via OAuth (managed by <code>pi login</code>)'
+      : p.no_key ? 'No authentication required' : 'Not configured';
+
+    let actions = '';
+    if (p.oauth_only || p.status === 'oauth') {
+      actions = '<span class="muted small">pi login</span>';
+    } else if (p.no_key) {
+      actions = '<span class="muted small">—</span>';
+    } else if (p.status === 'set') {
+      actions = `<button class="secondary" data-action="edit">Update</button><button class="secondary" data-action="delete" style="color:#f88">Remove</button>`;
+    } else {
+      actions = `<button data-action="edit">Add key</button>`;
+    }
+
+    card.innerHTML = `
+      <div class="prov-info">
+        <span class="prov-dot ${dotClass}"></span>
+        <div>
+          <div class="prov-name">${p.name}</div>
+          <div class="prov-meta">${metaText}</div>
+        </div>
+      </div>
+      <div class="prov-actions">${actions}</div>
+      ${!p.oauth_only && !p.no_key && p.status !== 'oauth' ? `
+      <div class="prov-form" id="form-${p.id}">
+        <input type="password" id="key-${p.id}" placeholder="Paste API key…" autocomplete="off" autocorrect="off" spellcheck="false">
+        <div class="prov-form-actions">
+          <button data-action="save">Save</button>
+          <button class="secondary" data-action="cancel">Cancel</button>
+        </div>
+      </div>` : ''}
+    `;
+
+    card.addEventListener('click', async e => {
+      const action = e.target.closest('[data-action]')?.dataset.action;
+      if (!action) return;
+      const form = card.querySelector('.prov-form');
+      const input = card.querySelector(`#key-${p.id}`);
+
+      if (action === 'edit') {
+        form?.classList.toggle('open', true);
+        input?.focus();
+      } else if (action === 'cancel') {
+        form?.classList.remove('open');
+        if (input) input.value = '';
+      } else if (action === 'save') {
+        const key = input?.value.trim();
+        if (!key) { showMsg('Paste an API key first.', false); return; }
+        try {
+          const r = await fetch('/api/auth/', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrf()}, body: JSON.stringify({provider: p.id, key, action:'set'})});
+          const d = await r.json();
+          if (!d.ok) { showMsg(d.error || 'Save failed', false); return; }
+          showMsg(`${p.name} key saved.`, true);
+          load();
+        } catch(e) { showMsg('Save failed: ' + e.message, false); }
+      } else if (action === 'delete') {
+        if (!confirm(`Remove the API key for ${p.name}?`)) return;
+        try {
+          const r = await fetch('/api/auth/', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrf()}, body: JSON.stringify({provider: p.id, action:'delete'})});
+          const d = await r.json();
+          if (!d.ok) { showMsg(d.error || 'Remove failed', false); return; }
+          showMsg(`${p.name} key removed.`, true);
+          load();
+        } catch(e) { showMsg('Remove failed: ' + e.message, false); }
+      }
+    });
+
+    // Save on Enter
+    card.querySelector(`#key-${p.id}`)?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') card.querySelector('[data-action="save"]')?.click();
+    });
+
+    return card;
+  }
+
+  async function load() {
+    try {
+      const r = await fetch('/api/auth/');
+      const d = await r.json();
+      list.innerHTML = '';
+      for (const p of d.providers) list.appendChild(renderCard(p));
+    } catch(e) {
+      showMsg('Failed to load: ' + e.message, false);
+    }
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

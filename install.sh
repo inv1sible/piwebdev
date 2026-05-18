@@ -30,7 +30,7 @@ info "Updating apt package indexes"
 apt-get update
 
 info "Installing base packages"
-apt_install ca-certificates curl git python3 python3-venv python3-pip npm
+apt_install ca-certificates curl git python3 python3-venv python3-pip
 
 if ! command -v docker >/dev/null 2>&1; then
   info "Installing Docker from distro packages"
@@ -56,18 +56,36 @@ fi
 
 systemctl enable --now docker >/dev/null 2>&1 || warn "Could not enable/start docker via systemd; continuing."
 
-if ! sudo -H -u "$SERVICE_USER" bash -lc 'command -v node >/dev/null && command -v npm >/dev/null'; then
-  warn "Node/npm still not visible for ${SERVICE_USER} after apt install. Install Node manually if Pi install fails."
-else
-  info "Node for ${SERVICE_USER}: $(sudo -H -u "$SERVICE_USER" bash -lc 'node --version 2>/dev/null')"
-  info "npm for ${SERVICE_USER}: $(sudo -H -u "$SERVICE_USER" bash -lc 'npm --version 2>/dev/null')"
-fi
+# Ensure nvm + Node >=20 are available for SERVICE_USER, then install Pi CLI via nvm npm.
+ensure_node20() {
+  if ! sudo -H -u "$SERVICE_USER" bash -lc 'test -s "$HOME/.nvm/nvm.sh"'; then
+    info "Installing nvm for ${SERVICE_USER}"
+    sudo -H -u "$SERVICE_USER" bash -lc \
+      'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | PROFILE=/dev/null bash'
+  else
+    info "nvm already present for ${SERVICE_USER}"
+  fi
 
-if ! sudo -H -u "$SERVICE_USER" bash -lc 'command -v pi >/dev/null 2>&1'; then
-  info "Installing Pi CLI npm package (${PI_NPM_PACKAGE}) globally"
-  npm install -g "$PI_NPM_PACKAGE"
+  NODE_MAJOR=$(sudo -H -u "$SERVICE_USER" bash -lc \
+    'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; node --version 2>/dev/null | sed "s/v//" | cut -d. -f1' \
+    2>/dev/null || echo 0)
+
+  if [ "${NODE_MAJOR:-0}" -lt 20 ]; then
+    info "Node ${NODE_MAJOR} detected — upgrading to Node 20 via nvm (Node 18 is not supported)"
+    sudo -H -u "$SERVICE_USER" bash -lc \
+      'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm install 20; nvm alias default 20'
+  else
+    info "Node ${NODE_MAJOR} is sufficient (>=20)"
+  fi
+}
+ensure_node20
+
+if ! sudo -H -u "$SERVICE_USER" bash -lc 'source ~/.nvm/nvm.sh 2>/dev/null; command -v pi >/dev/null 2>&1'; then
+  info "Installing Pi CLI npm package (${PI_NPM_PACKAGE}) globally via nvm npm"
+  sudo -H -u "$SERVICE_USER" bash -lc \
+    "source ~/.nvm/nvm.sh 2>/dev/null; npm install -g '${PI_NPM_PACKAGE}'"
 else
-  info "Pi CLI already installed for ${SERVICE_USER}: $(sudo -H -u "$SERVICE_USER" bash -lc 'command -v pi')"
+  info "Pi CLI already installed for ${SERVICE_USER}: $(sudo -H -u "$SERVICE_USER" bash -lc 'source ~/.nvm/nvm.sh 2>/dev/null; command -v pi')"
 fi
 
 if [ ! -f .env ]; then

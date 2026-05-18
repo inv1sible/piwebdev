@@ -200,23 +200,62 @@ if(shell){
     if(e.isError)return {icon:'✗',label:'error',cls:'error'};
     return {icon:'✓',label:'done',cls:'done'};
   }
+  function toolSummary(lname,out,isError){
+    if(isError)return `<div class="tool-summary error">${esc((out||'error').slice(0,300))}</div>`;
+    if(!out)return '<div class="tool-summary muted">no output</div>';
+    if(lname==='read'||lname==='glob'){
+      const lines=out.split('\n'),n=lines.length;
+      const first=lines.find(l=>l.trim())||'';
+      return `<div class="tool-summary"><span class="muted">${n} line${n===1?'':'s'}</span>${first?` — ${esc(first.slice(0,130))}${first.length>130?'…':''}`:''}</div>`;
+    }
+    if(lname==='bash'){
+      const lines=out.split('\n').filter(l=>l.trim());
+      const last=lines[lines.length-1]||'done';
+      return `<div class="tool-summary">${esc(last.slice(0,200))}</div>`;
+    }
+    if(lname==='grep'||lname==='search'){
+      const n=out.split('\n').filter(l=>l.trim()).length;
+      return `<div class="tool-summary muted">${n} result${n===1?'':'s'}</div>`;
+    }
+    const first=out.split('\n').find(l=>l.trim())||'done';
+    return `<div class="tool-summary muted">${esc(first.slice(0,200))}</div>`;
+  }
   function toolHtml(e){
-    const name=e.toolName||e.name||'tool', args=e.args||{}, command=args.command||args.cmd||args.path||args.file||'';
+    const name=e.toolName||e.name||'tool', lname=name.toLowerCase(), args=e.args||{};
+    const command=args.command||args.cmd||args.path||args.file||args.file_path||'';
+    const titleCmd=args.file_path ? (args.file_path.split('/').pop()||args.file_path)
+                 : (lname==='bash'&&args.description) ? args.description
+                 : args.command||args.cmd||args.path||args.file||'';
     const st=toolState(e);
-    const titleHtml=`<span class="ts-badge ${st.cls}">${esc(st.icon)}</span><span class="ts-tool">${esc(name)}</span>${command?`<code class="ts-cmd">${esc(command.slice(0,80))}</code>`:''}`;
-    const parts=[`<div class="tool-meta ${st.cls}"><span>${esc(st.label)}</span><span>${esc(name)}</span></div>`];
-    if(command)parts.push(`<div class="tool-command"><div class="tool-label">command</div><pre>${esc(command)}</pre></div>`);
-    const argLines=Object.entries(args).filter(([k])=>!['command','cmd'].includes(k)).map(([k,v])=>`<div class="tool-row"><span>${esc(k)}</span><code>${esc(typeof v==='string'?v:JSON.stringify(v))}</code></div>`).join('');
-    if(argLines)parts.push(`<div class="tool-args">${argLines}</div>`);
+    const titleHtml=`<span class="ts-badge ${st.cls}">${esc(st.icon)}</span><span class="ts-tool">${esc(name)}</span>${titleCmd?`<code class="ts-cmd">${esc(titleCmd.slice(0,80))}</code>`:''}`;
     const out=resultText(e.result)||resultText(e.partialResult);
-    if(out)parts.push(`<div class="tool-output"><div class="tool-label">output</div><pre>${esc(out)}</pre></div>`);
+    const isDone=e.type==='tool_execution_end';
+    const parts=[];
+    if(isDone){
+      parts.push(toolSummary(lname,out,e.isError));
+    } else {
+      parts.push(`<div class="tool-meta ${st.cls}"><span>${esc(st.label)}</span><span>${esc(name)}</span></div>`);
+      if(command)parts.push(`<div class="tool-command"><div class="tool-label">command</div><pre>${esc(command)}</pre></div>`);
+      const argLines=Object.entries(args).filter(([k])=>!['command','cmd'].includes(k)).map(([k,v])=>`<div class="tool-row"><span>${esc(k)}</span><code>${esc(typeof v==='string'?v:JSON.stringify(v))}</code></div>`).join('');
+      if(argLines)parts.push(`<div class="tool-args">${argLines}</div>`);
+      if(out)parts.push(`<div class="tool-output"><div class="tool-label">output</div><pre>${esc(out)}</pre></div>`);
+    }
     parts.push(`<details class="raw-json"><summary>raw event</summary><pre>${esc(JSON.stringify(e,null,2))}</pre></details>`);
     return {titleHtml,body:parts.join(''),state:st.cls,id:e.toolCallId||`${name}-${Date.now()}`};
   }
   function upsertToolEvent(e){
     const f=toolHtml(e); let item=activeTools.get(f.id);
     if(!item){item=addDetails('tool '+f.state,f.titleHtml,true,f.body); activeTools.set(f.id,item)}
-    else {item.el.className='msg tool '+f.state; item.el.querySelector('summary').innerHTML=f.titleHtml; item.body.innerHTML=f.body}
+    else {
+      item.el.className='msg tool '+f.state; item.body.innerHTML=f.body;
+      if(e.type==='tool_execution_end'){
+        // Preserve filename/description from start — only flip the badge icon
+        const badge=item.el.querySelector('summary .ts-badge');
+        if(badge){badge.className=`ts-badge ${f.state}`; badge.textContent={'running':'▶','done':'✓','error':'✗'}[f.state]||'✓';}
+      } else {
+        item.el.querySelector('summary').innerHTML=f.titleHtml;
+      }
+    }
     if(e.type==='tool_execution_end'){item.el.open=!!e.isError; activeTools.delete(f.id)}
     return item;
   }
@@ -290,19 +329,54 @@ if(shell){
       if(m.type==='pi'){
         const e=m.event||{}, d=e.assistantMessageEvent||{};
         if(e.type==='agent_start'||e.type==='turn_start')setStatus('agent working',true);
-        if(e.type==='message_update'&&d.type==='thinking_delta'){setStatus('thinking',true); ensureTask(); if(!thinking)thinking=addDetails('analysis','Analysis / thinking',false); thinking.body.dataset.raw=(thinking.body.dataset.raw||'')+d.delta; thinking.body.innerHTML=md(thinking.body.dataset.raw); scrollToEl(thinking.el); return}
+        if(e.type==='message_update'&&d.type==='thinking_delta'){setStatus('thinking',true); ensureTask(); if(!thinking){const el=document.createElement('details');el.className='msg analysis';el.innerHTML='<summary>Analysis / thinking</summary><div class="details-body"></div>';currentTask.resultEl.prepend(el);currentTask.resultEl.classList.remove('hidden');thinking={el,body:el.querySelector('.details-body')};} thinking.body.dataset.raw=(thinking.body.dataset.raw||'')+d.delta; thinking.body.innerHTML=md(thinking.body.dataset.raw); scrollToEl(thinking.el); return}
         if(e.type==='tool_execution_start'){ensureTask(); toolsTotal++; setStatus('running: '+(e.toolName||'tool'),true); upsertToolEvent(e); updateRuntimeBar();}
         if(e.type==='tool_execution_update')upsertToolEvent(e);
         if(e.type==='tool_execution_end'){setStatus('agent working',true); upsertToolEvent(e); if(['Write','Edit','NotebookEdit','MultiEdit'].includes(e.toolName))loadTree(currentPath);}
+        if(e.type==='compaction_start'){setStatus('compacting…',true);}
+        if(e.type==='compaction_end'){const b=$('#compactBtn');if(b){b.disabled=false;b.textContent='⊟ Compact';} setStatus('idle',false);}
         if(e.type==='agent_end'){
           setStatus('idle'); updateRuntimeBar();
           try{finishCurrentTask('done'); loadTree(currentPath);}catch(err){}
+          // Auto-refresh stats after each response so the context bar stays current
+          if(ws&&ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'get_stats'}));
           return;
         }
+      }
+      if(m.type==='task_failed'){
+        const hint=m.hint||'Provider error — check API key and quota.';
+        const fb=m.fallback, lastPrompt=m.last_prompt||'';
+        const provLabel=m.model?`${m.provider}/${m.model}`:m.provider||'provider';
+        let fbHtml='';
+        if(fb){
+          fbHtml=`<div style="margin-top:8px">
+            <span class="muted small">Fallback available: <strong style="color:var(--text)">${esc(fb.provider)}/${esc(fb.model)}</strong></span>
+            <button class="secondary" style="margin-left:8px;padding:3px 10px;font-size:12px" data-retry-provider="${esc(fb.provider)}" data-retry-model="${esc(fb.model)}" data-retry-prompt="${esc(lastPrompt)}">↩ Retry with ${esc(fb.model)}</button>
+          </div>`;
+        }
+        const errEl=document.createElement('div');
+        errEl.className='msg tool'; errEl.style.cssText='border-color:var(--danger);padding:12px';
+        errEl.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><strong style="color:var(--danger)">⚠ ${esc(provLabel)} failed</strong></div><div class="muted small" style="line-height:1.6">${esc(hint)}</div>${fbHtml}`;
+        const target=currentTask?currentTask.body:$('#messages');
+        target.appendChild(errEl);
+        // Retry button handler
+        errEl.addEventListener('click',e=>{
+          const btn=e.target.closest('[data-retry-provider]');
+          if(!btn)return;
+          if(!ws||ws.readyState!==WebSocket.OPEN){toast('Not connected.','err');return;}
+          btn.disabled=true; btn.textContent='Switching…';
+          ws.send(JSON.stringify({type:'retry_with_fallback',provider:btn.dataset.retryProvider,model:btn.dataset.retryModel,prompt:btn.dataset.retryPrompt}));
+        });
+        if(currentTask){finaliseTaskGroup(currentTask,null,'error'); currentTask=null;}
+        assistant=null; thinking=null; activeTools=new Map();
+        toast(`${provLabel} failed — ${fb?'retrying with '+fb.model:'check API quota'}`,fb?'ok':'err');
+        return;
       }
       if(m.type==='fatal'){fatalError=true; setStatus(m.message||'fatal error'); showError(m.message||'fatal error'); return;}
       if(m.type==='checkpoint'){location.reload();return;}
       if(m.type==='toast'){toast(m.message,m.toast_type||'ok'); return;}
+      if(m.type==='compact_done'){const b=$('#compactBtn');if(b){b.disabled=false;b.textContent='⊟ Compact';}toast('Session compacted.'); if(ws&&ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'get_stats'})); return;}
+      if(m.type==='session_stats'){updateContextChip(m.stats); if(statsModalOpen) showStatsModal(m.stats); return;}
       if(m.type==='stderr')addDetails('tool','stderr',false,esc(m.content));
       if(m.type==='tool')addDetails('tool','tool output',false,esc(m.content));
       if(m.type==='message'){
@@ -563,6 +637,77 @@ if(shell){
     }
   });
 
+  // Task context menu (right-click / long-press on task items)
+  let _ctxMenu=null, _ctxTimer=null;
+  function removeCtxMenu(){if(_ctxMenu){_ctxMenu.remove();_ctxMenu=null;}}
+  document.addEventListener('click',()=>removeCtxMenu(),{capture:true});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')removeCtxMenu();});
+
+  function showTaskCtxMenu(e, taskWrap){
+    e.preventDefault();
+    removeCtxMenu();
+    const summary=taskWrap.querySelector('.task-summary');
+    const promptEl=summary?.querySelector('.task-prompt');
+    const promptText=promptEl?.dataset.fullPrompt||promptEl?.textContent?.replace(/^\$\s*/,'')||'';
+    const doneBtn=summary?.querySelector('.done-btn');
+    const playBtn=summary?.querySelector('.play-btn');
+    const isDone=summary?.querySelector('.task-badge.done');
+    const msgId=doneBtn?.dataset.messageId||playBtn?.dataset.messageId;
+
+    const items=[];
+    if(playBtn&&!piWorking) items.push({icon:'▶',label:'Re-run prompt',action:()=>playBtn.click()});
+    if(promptText) items.push({icon:'⧉',label:'Copy prompt',action:()=>{navigator.clipboard.writeText(promptText).catch(()=>{}); toast('Copied.');}});
+    if(doneBtn) items.push({icon:'✓',label:'Mark done',action:()=>doneBtn.click()});
+    if(msgId&&!isDone) items.push({icon:'✕',label:'Delete task',action:()=>deleteTask(msgId,taskWrap)});
+
+    if(!items.length) return;
+    const menu=document.createElement('div');
+    menu.className='ctx-menu';
+    menu.style.cssText=`position:fixed;z-index:9999;top:${e.clientY}px;left:${e.clientX}px`;
+    items.forEach(item=>{
+      const btn=document.createElement('button');
+      btn.className='ctx-item';
+      btn.innerHTML=`<span class="ctx-icon">${item.icon}</span>${esc(item.label)}`;
+      btn.onclick=ev=>{ev.stopPropagation();removeCtxMenu();item.action();};
+      menu.appendChild(btn);
+    });
+    document.body.appendChild(menu);
+    _ctxMenu=menu;
+    // Reposition if off-screen
+    const rect=menu.getBoundingClientRect();
+    if(rect.right>window.innerWidth) menu.style.left=(e.clientX-rect.width)+'px';
+    if(rect.bottom>window.innerHeight) menu.style.top=(e.clientY-rect.height)+'px';
+  }
+
+  async function deleteTask(msgId, taskWrap){
+    if(!confirm('Delete this task and its messages?')) return;
+    try{
+      await api(`/api/projects/${projectId}/task/delete/`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message_id:msgId})});
+      taskWrap.remove(); toast('Task deleted.');
+    }catch(err){showError(err.message);}
+  }
+
+  // Right-click on task wrap
+  $('#messages')?.addEventListener('contextmenu',e=>{
+    const tw=e.target.closest('.task-wrap');
+    if(tw) showTaskCtxMenu(e,tw);
+  });
+
+  // Long-press on task wrap (touch / pointer)
+  $('#messages')?.addEventListener('pointerdown',e=>{
+    const tw=e.target.closest('.task-wrap');
+    if(!tw||e.button===2) return;
+    _ctxTimer=setTimeout(()=>{
+      _ctxTimer=null;
+      showTaskCtxMenu({clientX:e.clientX,clientY:e.clientY,preventDefault:()=>{}},tw);
+    },600);
+  },{passive:true});
+  ['pointerup','pointercancel','pointermove'].forEach(ev=>
+    $('#messages')?.addEventListener(ev,e=>{
+      if(_ctxTimer){clearTimeout(_ctxTimer);_ctxTimer=null;}
+    },{passive:true})
+  );
+
   const memoryBtn=$('#memoryBtn');
   if(memoryBtn){
     const modal=$('#memoryModal'), ta=$('#memoryContent'), pathEl=$('#memoryPath');
@@ -587,6 +732,171 @@ if(shell){
     };
     modal.addEventListener('click',e=>{if(e.target===modal)close();});
     document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!modal.classList.contains('hidden'))close();});
+  }
+
+  // AGENTS.md modal
+  const agentsBtn=$('#agentsBtn');
+  if(agentsBtn){
+    const modal=$('#agentsModal'), ta=$('#agentsContent');
+    const agentsUrl=`/api/projects/${projectId}/agents/`;
+    const open=async()=>{
+      try{
+        const r=await fetch(agentsUrl,{credentials:'same-origin'});
+        const j=await r.json();
+        ta.value=j.content||'';
+        modal.classList.remove('hidden');
+        ta.focus();
+      }catch(e){toast('Could not load AGENTS.md: '+e.message,'err');}
+    };
+    const close=()=>modal.classList.add('hidden');
+    agentsBtn.onclick=open;
+    $('#agentsCancel').onclick=close;
+    $('#agentsSave').onclick=async()=>{
+      try{
+        await fetch(agentsUrl,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':csrf()},body:JSON.stringify({content:ta.value})});
+        close(); toast('AGENTS.md saved.');
+      }catch(e){toast('Save failed: '+e.message,'err');}
+    };
+    modal.addEventListener('click',e=>{if(e.target===modal)close();});
+    document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!modal.classList.contains('hidden'))close();});
+  }
+
+  // Stats modal
+  let statsModalOpen=false, lastStats=null;
+
+  function ctxColor(pct){
+    if(pct>=90) return '#f85149';
+    if(pct>=75) return '#e3832c';
+    if(pct>=60) return '#e3c02c';
+    return 'var(--accent,#72f1b8)';
+  }
+
+  function updateContextChip(stats){
+    lastStats=stats;
+    // contextUsage fields: {tokens, contextWindow, percent} — tokens/percent can be null
+    const ctx=stats&&stats.contextUsage;
+    const wrap=$('#ctxUsage');
+    if(!wrap) return;
+    if(!ctx||!ctx.contextWindow||ctx.percent==null){wrap.style.display='none'; return;}
+    const pct=Math.min(100,Math.round(ctx.percent));
+    const color=ctxColor(pct);
+    const used=ctx.tokens||0;
+    const remaining=ctx.contextWindow-used;
+    wrap.style.display='block';
+    const pctEl=$('#ctxPct'), fillEl=$('#ctxFill'), remEl=$('#ctxRemaining');
+    if(pctEl){pctEl.textContent=pct+'%'; pctEl.style.color=pct>=60?color:'';}
+    if(fillEl){fillEl.style.width=pct+'%'; fillEl.style.background=color;}
+    if(remEl) remEl.textContent=remaining.toLocaleString()+' tokens left';
+  }
+
+  function showStatsModal(stats){
+    const modal=$('#statsModal'), content=$('#statsContent');
+    if(!modal) return;
+    stats=stats||lastStats||{};
+    const t=stats.tokens||{};
+    // contextUsage: {tokens: number|null, contextWindow: number, percent: number|null}
+    const ctx=stats.contextUsage;
+    let html=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:13px">
+      <span class="muted">Input</span><span>${(t.input||0).toLocaleString()}</span>
+      <span class="muted">Output</span><span>${(t.output||0).toLocaleString()}</span>
+      <span class="muted">Cache read</span><span>${(t.cacheRead||0).toLocaleString()}</span>
+      <span class="muted">Cache write</span><span>${(t.cacheWrite||0).toLocaleString()}</span>
+      <span class="muted">Total tokens</span><strong>${(t.total||0).toLocaleString()}</strong>
+      <span class="muted">Cost</span><span>$${(stats.cost||0).toFixed(4)}</span>
+      <span class="muted">Messages</span><span>${stats.totalMessages||0}</span>
+      <span class="muted">Tool calls</span><span>${stats.toolCalls||0}</span>
+    </div>`;
+    if(ctx&&ctx.contextWindow>0){
+      if(ctx.percent!=null){
+        const pct=Math.min(100,Math.round(ctx.percent));
+        const color=ctxColor(pct);
+        const used=ctx.tokens||0;
+        const remaining=ctx.contextWindow-used;
+        html+=`<div style="margin-top:16px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+            <span style="font-size:15px;font-weight:700;color:${color}">${pct}% used</span>
+            <span class="muted small">${used.toLocaleString()} / ${ctx.contextWindow.toLocaleString()} tokens</span>
+          </div>
+          <div class="ctx-bar" style="height:12px">
+            <div class="ctx-fill" style="width:${pct}%;background:${color}"></div>
+          </div>
+          <div class="muted small" style="margin-top:6px">${remaining.toLocaleString()} tokens remaining</div>
+          ${pct>=70?`<div style="margin-top:10px;padding:8px 12px;border-radius:6px;background:${color}18;border:1px solid ${color};font-size:12px;color:${color}">
+            ${pct>=90?'⚠ Context almost full — compact soon to avoid cutoff':'↓ Consider compacting to free context for longer sessions'}
+          </div>`:''}
+        </div>`;
+      } else {
+        html+=`<div style="margin-top:12px;padding:8px 12px;border-radius:6px;background:var(--panel2);font-size:12px;color:var(--muted)">
+          Context window: ${ctx.contextWindow.toLocaleString()} tokens — usage unknown until next response
+        </div>`;
+      }
+    }
+    content.innerHTML=html;
+    // Inject inline compact button into modal footer when context is high
+    const foot=modal.querySelector('.modal-foot');
+    let compactInModal=foot.querySelector('.stats-compact-btn');
+    const ctxPct=ctx&&ctx.percent!=null?ctx.percent:0;
+    if(ctxPct>=70){
+      if(!compactInModal){
+        compactInModal=document.createElement('button');
+        compactInModal.className='stats-compact-btn';
+        compactInModal.textContent='⊟ Compact now';
+        compactInModal.addEventListener('click',()=>{
+          modal.classList.add('hidden'); statsModalOpen=false;
+          $('#compactBtn')?.click();
+        });
+        foot.insertBefore(compactInModal,foot.firstChild);
+      }
+    } else if(compactInModal) compactInModal.remove();
+    modal.classList.remove('hidden');
+    statsModalOpen=true;
+  }
+
+  $('#statsBtn')?.addEventListener('click',()=>{
+    if(!ws||ws.readyState!==WebSocket.OPEN){
+      // Show cached stats if available
+      if(lastStats){showStatsModal(lastStats);return;}
+      toast('Not connected.','err'); return;
+    }
+    statsModalOpen=true;
+    ws.send(JSON.stringify({type:'get_stats'}));
+  });
+  function closeStats(){$('#statsModal')?.classList.add('hidden'); statsModalOpen=false;}
+  $('#statsClose')?.addEventListener('click',closeStats);
+  $('#statsModal')?.addEventListener('click',e=>{if(e.target===$('#statsModal'))closeStats();});
+
+  // Compact button
+  $('#compactBtn')?.addEventListener('click',()=>{
+    if(!ws||ws.readyState!==WebSocket.OPEN){toast('Not connected.','err');return;}
+    if(piWorking){toast('Cannot compact while agent is working.','err');return;}
+    const b=$('#compactBtn');
+    if(b){b.disabled=true;b.textContent='⊟ Compacting…';}
+    ws.send(JSON.stringify({type:'compact'}));
+  });
+}
+
+// Dynamic model reload on settings pages (project settings / user settings)
+{
+  const provSel=document.querySelector('select[name="provider"]');
+  const modSel=document.querySelector('select[name="model"]');
+  if(provSel&&modSel){
+    const btn=document.createElement('button');
+    btn.type='button'; btn.className='secondary'; btn.textContent='⟳ Reload models';
+    btn.style.cssText='margin-top:8px;font-size:12px;padding:4px 10px;display:block';
+    const anchor=modSel.closest('p')||modSel.closest('div')||modSel.parentNode;
+    anchor?.appendChild(btn);
+    btn.onclick=async()=>{
+      btn.disabled=true; btn.textContent='⟳ Loading…';
+      try{
+        const r=await fetch('/api/models/'); const j=await r.json();
+        const pv=provSel.value, mv=modSel.value;
+        provSel.innerHTML=j.providers.map(([v,l])=>`<option value="${esc(v)}">${esc(l)}</option>`).join('');
+        modSel.innerHTML=j.models.map(([v,l])=>`<option value="${esc(v)}">${esc(l)}</option>`).join('');
+        provSel.value=pv; modSel.value=mv;
+        btn.textContent='⟳ Reloaded ✓';
+      }catch(e){btn.textContent='⟳ Failed';}
+      finally{btn.disabled=false; setTimeout(()=>{btn.textContent='⟳ Reload models';},3000);}
+    };
   }
 }
 

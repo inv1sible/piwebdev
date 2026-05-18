@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import urllib.request
 from pathlib import Path
 from django.conf import settings
 from django.contrib import messages
@@ -17,9 +18,9 @@ from django.utils.decorators import method_decorator
 from django.contrib.auth.views import LoginView
 from django_ratelimit.decorators import ratelimit
 from .auth_forms import UsernameOrEmailAuthenticationForm
-from .forms import ProjectCreateForm, ProjectRenameForm, ProjectMemoryForm, ProjectPiSettingsForm
+from .forms import ProjectCreateForm, ProjectRenameForm, ProjectMemoryForm, ProjectPiSettingsForm, UserPiSettingsForm
 from .models import Project, ProjectMemory, ProjectPiSettings, UserPiSettings, PiSession, ChatMessage, TerminalSession
-from .utils import project_slug, safe_workspace_path, resolve_project_path, list_dir, safe_extract_zip
+from .utils import project_slug, safe_workspace_path, resolve_project_path, list_dir, safe_extract_zip, get_provider_choices, get_model_choices, get_pi_models_config
 
 
 def run_git(cwd, args, timeout=30):
@@ -160,6 +161,263 @@ def api_memory(request, pk):
 
 
 @login_required
+def api_agents_md(request, pk):
+    project = get_object_or_404(Project, pk=pk)
+    agents_file = Path(project.path) / "AGENTS.md"
+    if request.method == "POST":
+        data = json.loads(request.body)
+        agents_file.write_text(data.get("content", ""), encoding="utf-8")
+        return JsonResponse({"ok": True})
+    content = agents_file.read_text(encoding="utf-8") if agents_file.exists() else ""
+    return JsonResponse({"content": content})
+
+
+_CONTEXT_FILES = {"AGENTS.md", "CLAUDE.md"}
+
+
+def _pi_agent_dir():
+    auth_path = os.environ.get("PI_AUTH_JSON", "")
+    return Path(auth_path).parent if auth_path else (Path.home() / ".pi" / "agent")
+
+
+@login_required
+def api_project_context(request, pk):
+    """Read/write AGENTS.md or CLAUDE.md in the project root."""
+    project = get_object_or_404(Project, pk=pk)
+    if request.method == "POST":
+        data = json.loads(request.body)
+        fname = data.get("file", "")
+        if fname not in _CONTEXT_FILES:
+            return JsonResponse({"error": "file must be AGENTS.md or CLAUDE.md"}, status=400)
+        (Path(project.path) / fname).write_text(data.get("content", ""), encoding="utf-8")
+        return JsonResponse({"ok": True})
+    fname = request.GET.get("file", "")
+    if fname not in _CONTEXT_FILES:
+        return JsonResponse({"error": "file must be AGENTS.md or CLAUDE.md"}, status=400)
+    path = Path(project.path) / fname
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    return JsonResponse({"content": content, "path": str(path)})
+
+
+@login_required
+def api_global_context(request):
+    """Read/write global AGENTS.md or CLAUDE.md in ~/.pi/agent/."""
+    if request.method == "POST":
+        data = json.loads(request.body)
+        fname = data.get("file", "")
+    else:
+        fname = request.GET.get("file", "")
+    if fname not in _CONTEXT_FILES:
+        return JsonResponse({"error": "file must be AGENTS.md or CLAUDE.md"}, status=400)
+    path = _pi_agent_dir() / fname
+    if request.method == "POST":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data.get("content", ""), encoding="utf-8")
+        return JsonResponse({"ok": True})
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    return JsonResponse({"content": content, "path": str(path)})
+
+
+@login_required
+def api_models(request):
+    config = get_pi_models_config()
+    by_provider = {
+        pid: [m["id"] for m in pcfg.get("models", [])]
+        for pid, pcfg in config.get("providers", {}).items()
+    }
+    model_reasoning = {
+        m["id"]: bool(m.get("reasoning"))
+        for pcfg in config.get("providers", {}).values()
+        for m in pcfg.get("models", [])
+        if m.get("id")
+    }
+    return JsonResponse({
+        "providers": get_provider_choices(),
+        "models": get_model_choices(),
+        "by_provider": by_provider,
+        "model_reasoning": model_reasoning,
+    })
+
+
+@login_required
+def api_user_prefs(request):
+    cfg, _ = UserPiSettings.objects.get_or_create(user=request.user)
+    if request.method == "POST":
+        data = json.loads(request.body)
+        for field in ["provider", "model", "thinking_level", "extra_args"]:
+            if field in data:
+                setattr(cfg, field, data[field])
+        if "use_context_files" in data:
+            cfg.use_context_files = bool(data["use_context_files"])
+        cfg.save()
+        return JsonResponse({"ok": True})
+    return JsonResponse({
+        "provider": cfg.provider or "",
+        "model": cfg.model or "",
+        "thinking_level": cfg.thinking_level or "",
+        "extra_args": cfg.extra_args or "",
+        "use_context_files": cfg.use_context_files,
+    })
+
+
+@login_required
+def api_models_edit(request):
+    auth_path = os.environ.get("PI_AUTH_JSON", "")
+    pi_agent_dir = Path(auth_path).parent if auth_path else (Path.home() / ".pi" / "agent")
+
+    # Build read-only pi catalog: merge builtin + pi's own models.json
+    pi_catalog: dict = {"providers": {}}
+    from .utils import _merge_providers
+    builtin_path = pi_agent_dir / "builtin-models.json"
+    if builtin_path.exists():
+        try:
+            _merge_providers(pi_catalog, json.loads(builtin_path.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    pi_models_path = pi_agent_dir / "models.json"
+    if pi_models_path.exists():
+        try:
+            _merge_providers(pi_catalog, json.loads(pi_models_path.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+
+    path_str = os.environ.get("PI_MODELS_JSON_PATH", "")
+    if not path_str:
+        return JsonResponse({
+            "error": "PI_MODELS_JSON_PATH is not set. Add it to .env to enable the provider catalog editor.",
+            "pi_catalog": pi_catalog,
+            "pi_catalog_path": str(pi_models_path),
+        }, status=400)
+    path = Path(path_str)
+    if request.method == "POST":
+        data = json.loads(request.body)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data.get("config", {}), indent=2), encoding="utf-8")
+        return JsonResponse({"ok": True})
+    config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"providers": {}}
+    return JsonResponse({
+        "config": config,
+        "path": str(path),
+        "pi_catalog": pi_catalog,
+        "pi_catalog_path": str(pi_models_path),
+    })
+
+
+_KNOWN_PROVIDERS = [
+    {"id": "google",       "name": "Google Gemini",   "env": "GEMINI_API_KEY"},
+    {"id": "anthropic",    "name": "Anthropic Claude", "env": "ANTHROPIC_API_KEY"},
+    {"id": "openai",       "name": "OpenAI",           "env": "OPENAI_API_KEY"},
+    {"id": "openai-codex", "name": "OpenAI Codex",     "env": None, "oauth_only": True},
+    {"id": "xai",          "name": "xAI Grok",         "env": "XAI_API_KEY"},
+    {"id": "deepseek",     "name": "DeepSeek",         "env": "DEEPSEEK_API_KEY"},
+    {"id": "groq",         "name": "Groq",             "env": "GROQ_API_KEY"},
+    {"id": "mistral",      "name": "Mistral",          "env": "MISTRAL_API_KEY"},
+    {"id": "openrouter",   "name": "OpenRouter",       "env": "OPENROUTER_API_KEY"},
+    {"id": "fireworks",    "name": "Fireworks",        "env": "FIREWORKS_API_KEY"},
+    {"id": "ollama",       "name": "Ollama (local)",   "env": None, "no_key": True},
+]
+
+
+def _auth_path():
+    return Path(os.environ.get("PI_AUTH_JSON", "/home/user01/.pi/agent/auth.json"))
+
+
+def _read_auth():
+    p = _auth_path()
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _write_auth(data):
+    p = _auth_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+@login_required
+def auth_page(request):
+    return redirect("/settings/#keys")
+
+
+@login_required
+def api_auth(request):
+    auth_data = _read_auth()
+    if request.method == "POST":
+        body = json.loads(request.body)
+        provider = body.get("provider", "").strip()
+        key = body.get("key", "").strip()
+        action = body.get("action", "set")
+        if not provider:
+            return JsonResponse({"error": "provider required"}, status=400)
+        if action == "delete":
+            auth_data.pop(provider, None)
+        else:
+            if not key:
+                return JsonResponse({"error": "key required"}, status=400)
+            auth_data[provider] = {"type": "api_key", "key": key}
+        try:
+            _write_auth(auth_data)
+        except OSError as e:
+            return JsonResponse({"error": f"Cannot write auth.json: {e}"}, status=500)
+        return JsonResponse({"ok": True})
+
+    result = []
+    for prov in _KNOWN_PROVIDERS:
+        pid = prov["id"]
+        cred = auth_data.get(pid)
+        status, key_preview, cred_type = "not_set", None, None
+        if cred:
+            cred_type = cred.get("type")
+            if cred_type == "api_key":
+                k = cred.get("key", "")
+                status = "set"
+                key_preview = (k[:4] + "…" + k[-4:]) if len(k) > 10 else "•••"
+            elif cred_type == "oauth":
+                status = "oauth"
+        result.append({
+            "id": pid, "name": prov["name"], "env": prov.get("env"),
+            "oauth_only": prov.get("oauth_only", False),
+            "no_key": prov.get("no_key", False),
+            "status": status, "key_preview": key_preview,
+        })
+    # Also include any unknown providers already in auth.json
+    known_ids = {p["id"] for p in _KNOWN_PROVIDERS}
+    for pid, cred in auth_data.items():
+        if pid not in known_ids:
+            cred_type = cred.get("type")
+            k = cred.get("key", "") if cred_type == "api_key" else ""
+            result.append({
+                "id": pid, "name": pid, "env": None, "oauth_only": cred_type == "oauth",
+                "no_key": False, "status": "oauth" if cred_type == "oauth" else "set",
+                "key_preview": (k[:4] + "…" + k[-4:]) if len(k) > 10 else ("•••" if k else None),
+            })
+    return JsonResponse({"providers": result})
+
+
+@login_required
+def api_ollama_tags(request):
+    url = request.GET.get("url", "").strip().rstrip("/")
+    if not url:
+        return JsonResponse({"error": "url parameter required"}, status=400)
+    try:
+        req = urllib.request.Request(url + "/api/tags", headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read())
+        return JsonResponse(data)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=502)
+
+
+@login_required
+def providers_page(request):
+    return redirect("/settings/#providers")
+
+
+@login_required
+def user_settings(request):
+    return render(request, "core/settings.html")
+
+
+@login_required
 def project_settings(request, pk):
     project = get_object_or_404(Project, pk=pk)
     obj, _ = ProjectPiSettings.objects.get_or_create(project=project)
@@ -180,16 +438,68 @@ def project_settings(request, pk):
             form.initial[field] = fallback
     if user_cfg.extra_args and not obj.extra_args:
         form.fields["extra_args"].widget.attrs["placeholder"] = f"default: {user_cfg.extra_args}"
-    return render(request, "core/project_form.html", {"form": form, "title": "Project Pi settings"})
+    catalog = get_pi_models_config()
+    return render(request, "core/project_settings.html", {
+        "form": form,
+        "project": project,
+        "catalog_json": json.dumps(catalog.get("providers", {})),
+        "effective": fallbacks,
+    })
 
 
 @login_required
 @require_POST
 def session_clear(request, pk):
+    import socket as _sock
     session = get_object_or_404(PiSession, pk=pk, user=request.user)
     session.messages.all().delete()
-    messages.success(request, "Session history cleared.")
+    # Kill the running pi process before wiping the session files
+    if session.session_dir:
+        sdir = Path(session.session_dir)
+        bridge_sock = getattr(settings, "PI_BRIDGE_SOCKET", "/var/opt/piwebdev/pi-bridge.sock")
+        try:
+            s = _sock.socket(_sock.AF_UNIX, _sock.SOCK_STREAM)
+            s.settimeout(3)
+            s.connect(bridge_sock)
+            s.sendall((json.dumps({"type": "kill", "session_key": str(sdir)}) + "\n").encode())
+            s.recv(256)
+            s.close()
+        except Exception:
+            pass
+        # Remove pi JSONL files so next start is fully fresh
+        if sdir.exists() and sdir.is_dir():
+            try:
+                shutil.rmtree(sdir)
+            except Exception:
+                pass
+        session.session_dir = ""
+        session.save(update_fields=["session_dir", "updated_at"])
+    messages.success(request, "Session cleared.")
     return redirect("project_detail", pk=session.project_id)
+
+
+@login_required
+@require_POST
+def task_delete(request, pk):
+    get_object_or_404(Project, pk=pk)
+    data = json.loads(request.body or b"{}")
+    prompt_msg = get_object_or_404(
+        ChatMessage,
+        pk=data.get("message_id"),
+        role="user",
+        session__project_id=pk,
+        session__user=request.user,
+    )
+    session = prompt_msg.session
+    next_user = session.messages.filter(
+        role="user",
+        created_at__gt=prompt_msg.created_at,
+    ).order_by("created_at").first()
+    qs = session.messages.filter(created_at__gte=prompt_msg.created_at)
+    if next_user:
+        qs = qs.filter(created_at__lt=next_user.created_at)
+    qs.delete()
+    return JsonResponse({"ok": True})
 
 
 @login_required
@@ -412,7 +722,7 @@ def offline(request):
 
 
 def service_worker(request):
-    version = "20260508-17"
+    version = "20260508-19"
     body = f"""
 const CACHE = 'piwebdev-{version}';
 const ASSETS = [

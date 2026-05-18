@@ -1,0 +1,176 @@
+{
+  "providers": {
+    "ollama": {
+      "models": [
+        {
+          "id": "qwen2.5-coder:7b"
+        },
+        {
+          "id": "llama3.2:latest"
+        },
+        {
+          "id": "llama3.1:latest"
+        },
+        {
+          "id": "nomic-embed-text:latest"
+        },
+        {
+          "id": "codellama-assistant:latest"
+        },
+        {
+          "id": "dolphin-phi:latest"
+        }
+      ]
+    },
+    "google": {
+      "models": [
+        {
+          "id": "gemini-1.5-flash"
+        },
+        {
+          "id": "gemini-1.5-flash-8b"
+        },
+        {
+          "id": "gemini-1.5-pro"
+        },
+        {
+          "id": "gemini-2.0-flash"
+        },
+        {
+          "id": "gemini-2.0-flash-lite"
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-flash-lite",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-flash-lite-preview-06-17",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-flash-lite-preview-09-2025",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-flash-preview-04-17",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-flash-preview-05-20",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-flash-preview-09-2025",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-pro-preview-05-06",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-2.5-pro-preview-06-05",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-3-flash-preview",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-3-pro-preview",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-3.1-flash-lite-preview",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-3.1-pro-preview",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-3.1-pro-preview-customtools",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-flash-latest",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-flash-lite-latest",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-live-2.5-flash",
+          "reasoning": true
+        },
+        {
+          "id": "gemini-live-2.5-flash-preview-native-audio",
+          "reasoning": true
+        },
+        {
+          "id": "gemma-3-27b-it"
+        },
+        {
+          "id": "gemma-4-26b-a4b-it",
+          "reasoning": true
+        },
+        {
+          "id": "gemma-4-31b-it",
+          "reasoning": true
+        }
+      ]
+    },
+    "openai-codex": {
+      "models": [
+        {
+          "id": "gpt-5.1",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.1-codex-max",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.1-codex-mini",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.2",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.2-codex",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.3-codex",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.3-codex-spark",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.4",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.4-mini",
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.5",
+          "reasoning": true
+        }
+      ]
+    }
+  }
+}

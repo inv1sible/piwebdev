@@ -1,0 +1,179 @@
+{% extends 'core/base.html' %}
+{% block title %}Pi settings — {{ project.name }}{% endblock %}
+{% block content %}
+<section class="wrap narrow">
+  <a class="muted small" href="{% url 'project_detail' project.pk %}">← {{ project.name }}</a>
+  <div class="card" style="margin-top:12px">
+    <h1 style="margin:0 0 4px">Pi settings</h1>
+    <p class="muted small" style="margin:0 0 20px">Project-specific overrides. Empty fields inherit from your global preferences.</p>
+
+    <form method="post" id="settingsForm">
+      {% csrf_token %}
+      <div style="display:grid;gap:18px;max-width:520px">
+
+        <!-- Provider -->
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:6px">Provider <span class="muted" style="font-weight:400">— default: {{ effective.provider }}</span></label>
+          <select name="provider" id="providerSel" class="form-select" style="width:100%">
+            <option value="">— use default ({{ effective.provider }}) —</option>
+          </select>
+        </div>
+
+        <!-- Model -->
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:6px">Model <span class="muted" style="font-weight:400">— default: {{ effective.model }}</span></label>
+          <select name="model" id="modelSel" class="form-select" style="width:100%">
+            <option value="">— use default ({{ effective.model }}) —</option>
+          </select>
+          <p id="noModelsHint" class="muted small" style="display:none;margin:4px 0 0">No models registered for this provider. Add them in <a href="/settings/#providers">Settings → Providers</a>.</p>
+        </div>
+
+        <!-- Thinking -->
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:6px">Thinking level <span class="muted" style="font-weight:400">— default: {{ effective.thinking_level }}</span></label>
+          {{ form.thinking_level }}
+        </div>
+
+        <!-- Context files -->
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          {{ form.use_context_files }}
+          <span class="small">Load AGENTS.md / CLAUDE.md context files</span>
+        </label>
+
+        <!-- Extra args -->
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:6px">Extra pi CLI arguments</label>
+          {{ form.extra_args }}
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:center">
+          <button type="submit">Save</button>
+          <a class="button secondary" href="{% url 'project_detail' project.pk %}">Cancel</a>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- Context files editors -->
+  <div class="card" style="margin-top:16px">
+    <h2 style="margin:0 0 4px;font-size:16px">Context files</h2>
+    <p class="muted small" style="margin:0 0 16px">Pi loads these from the project root at session start. More specific (project) files override global ones.</p>
+
+    <div style="display:grid;gap:20px">
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label class="small muted" style="font-weight:600">AGENTS.md</label>
+          <span id="projAgentsStatus" class="muted small"></span>
+        </div>
+        <textarea id="projAgents" rows="10" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5" placeholder="Project-specific instructions for pi…"></textarea>
+        <button id="projAgentsSave" type="button" style="margin-top:8px">Save AGENTS.md</button>
+      </div>
+
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label class="small muted" style="font-weight:600">CLAUDE.md</label>
+          <span id="projClaudeStatus" class="muted small"></span>
+        </div>
+        <textarea id="projClaude" rows="10" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5" placeholder="Alternative project context file…"></textarea>
+        <button id="projClaudeSave" type="button" style="margin-top:8px">Save CLAUDE.md</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+(function(){
+  // Catalog: {provider_id: {models: [{id, name?, reasoning?}, ...]}, ...}
+  const catalog = {{ catalog_json|safe }};
+  const currentProvider = "{{ form.instance.provider|escapejs }}";
+  const currentModel = "{{ form.instance.model|escapejs }}";
+
+  const provSel = document.getElementById('providerSel');
+  const modSel = document.getElementById('modelSel');
+  const noModels = document.getElementById('noModelsHint');
+  const thinkSel = document.getElementById('id_thinking_level');
+
+  // Build flat model→reasoning map
+  const modelReasoning = {};
+  Object.values(catalog).forEach(pcfg => {
+    (pcfg.models || []).forEach(m => { if (m.id) modelReasoning[m.id] = !!m.reasoning; });
+  });
+
+  // Build provider list from catalog
+  const providerIds = Object.keys(catalog).sort();
+  providerIds.forEach(pid => {
+    const opt = document.createElement('option');
+    opt.value = pid;
+    const models = catalog[pid]?.models || [];
+    opt.textContent = pid + (models.length ? ` (${models.length} model${models.length > 1 ? 's' : ''})` : '');
+    if (pid === currentProvider) opt.selected = true;
+    provSel.appendChild(opt);
+  });
+
+  function cascadeThinking(modelId) {
+    if (!thinkSel || !modelId) return;
+    const reasoning = modelReasoning[modelId];
+    if (reasoning === true) {
+      if (!thinkSel.value) thinkSel.value = 'minimal';
+    } else if (reasoning === false) {
+      thinkSel.value = '';
+    }
+  }
+
+  function fillModels(provider, selectModel) {
+    modSel.innerHTML = '<option value="">— use default —</option>';
+    const models = (catalog[provider]?.models) || [];
+    noModels.style.display = (provider && models.length === 0) ? 'block' : 'none';
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.id + (m.name && m.name !== m.id ? ` — ${m.name}` : '') + (m.reasoning ? ' [R]' : '');
+      if (m.id === selectModel) opt.selected = true;
+      modSel.appendChild(opt);
+    });
+    if (selectModel) cascadeThinking(selectModel);
+  }
+
+  modSel.addEventListener('change', () => cascadeThinking(modSel.value));
+
+  // Initial fill
+  fillModels(currentProvider, currentModel);
+
+  provSel.addEventListener('change', () => fillModels(provSel.value, ''));
+
+  // ── Context files ──
+  const projectId = {{ project.pk }};
+  const ctxUrl = `/api/projects/${projectId}/context/`;
+  function csrf() {
+    return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
+  }
+  async function loadCtx(fname) {
+    const key = fname === 'AGENTS.md' ? 'projAgents' : 'projClaude';
+    const status = document.getElementById(key + 'Status');
+    try {
+      const d = await (await fetch(ctxUrl + '?file=' + fname)).json();
+      document.getElementById(key).value = d.content || '';
+      if (status) status.textContent = d.path || '';
+    } catch(e) { if (status) status.textContent = 'load failed'; }
+  }
+  async function saveCtx(fname) {
+    const key = fname === 'AGENTS.md' ? 'projAgents' : 'projClaude';
+    const status = document.getElementById(key + 'Status');
+    const content = document.getElementById(key).value;
+    try {
+      const d = await (await fetch(ctxUrl, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json','X-CSRFToken':csrf()},
+        body: JSON.stringify({file: fname, content})
+      })).json();
+      if (status) status.textContent = d.ok ? 'saved ✓' : (d.error || 'error');
+      setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+    } catch(e) { if (status) status.textContent = 'save failed'; }
+  }
+  loadCtx('AGENTS.md');
+  loadCtx('CLAUDE.md');
+  document.getElementById('projAgentsSave').addEventListener('click', () => saveCtx('AGENTS.md'));
+  document.getElementById('projClaudeSave').addEventListener('click', () => saveCtx('CLAUDE.md'));
+})();
+</script>
+{% endblock %}

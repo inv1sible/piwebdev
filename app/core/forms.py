@@ -118,8 +118,9 @@ class ProjectPiSettingsForm(forms.ModelForm):
 
     class Meta:
         model = ProjectPiSettings
-        fields = ["provider", "model", "thinking_level", "mindset", "inject_memory", "extra_args"]
-        widgets = {"mindset": forms.Textarea(attrs={"rows": 5})}
+        fields = ["provider", "model", "thinking_level", "use_context_files", "extra_args"]
+        widgets = {"use_context_files": forms.CheckboxInput()}
+        labels = {"use_context_files": "Load AGENTS.md / CLAUDE.md context files"}
 
 
 class UserPiSettingsForm(forms.ModelForm):
@@ -129,5 +130,6 @@ class UserPiSettingsForm(forms.ModelForm):
 
     class Meta:
         model = UserPiSettings
-        fields = ["provider", "model", "thinking_level", "mindset", "extra_args"]
-        widgets = {"mindset": forms.Textarea(attrs={"rows": 5})}
+        fields = ["provider", "model", "thinking_level", "use_context_files", "extra_args"]
+        widgets = {"use_context_files": forms.CheckboxInput()}
+        labels = {"use_context_files": "Load AGENTS.md / CLAUDE.md context files"}

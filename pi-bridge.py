@@ -166,6 +166,21 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             pass
         return
 
+    # ── Kill request: terminate a session without connecting ───────────────────
+    if init.get("type") == "kill":
+        sk = init.get("session_key")
+        if sk and sk in _sessions:
+            _terminate_session(_sessions[sk])
+            reply({"status": "killed"})
+        else:
+            reply({"status": "not_found"})
+        try:
+            await writer.drain()
+            writer.close()
+        except Exception:
+            pass
+        return
+
     args        = init.get("args", [])
     cwd         = init.get("cwd", "/")
     session_key = init.get("session_key")

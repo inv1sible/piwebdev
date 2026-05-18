@@ -1,0 +1,253 @@
+{% extends 'core/base.html' %}
+{% block title %}Providers — π webui{% endblock %}
+{% block content %}
+<section class="wrap narrow">
+  <div class="card">
+    <h1>Provider &amp; Model Catalog</h1>
+    <p class="muted small">
+      This page has two purposes: the <strong>model catalog</strong> (what appears in dropdowns) and a quick way to import Ollama models.<br>
+      Authentication (API keys) is managed separately — see below.
+    </p>
+
+    <details style="margin-bottom:20px;border:1px solid var(--border,#333);border-radius:6px;padding:12px">
+      <summary style="cursor:pointer;font-weight:600;font-size:13px">How to add a new provider (e.g. Gemini, OpenAI, Anthropic…)</summary>
+      <div style="margin-top:12px;font-size:13px;line-height:1.7">
+        <p style="margin:0 0 8px"><strong>Step 1 — Set your API key</strong><br>
+        Add the key to <code>/var/opt/piwebdev/.env</code> and restart (<code>docker compose restart web</code>):</p>
+        <pre style="font-size:12px;margin:0 0 10px">GEMINI_API_KEY=your-key-here
+ANTHROPIC_API_KEY=your-key-here
+OPENAI_API_KEY=your-key-here
+XAI_API_KEY=your-key-here
+DEEPSEEK_API_KEY=your-key-here</pre>
+        <p style="margin:0 0 8px"><em>Alternatively</em>, put keys in <code>~/.pi/agent/auth.json</code> on the host (pi reads this directly).</p>
+        <p style="margin:0 0 8px"><strong>Step 2 — Add provider + models to the catalog below</strong><br>
+        Use the Quick-add section to add a provider and model ID, then Save. The model will appear in the project settings dropdowns.</p>
+        <p style="margin:0"><strong>Step 3 — Select the provider in your project</strong><br>
+        Open a project → Pi settings → choose the provider and model → Save.</p>
+      </div>
+    </details>
+
+    <div id="providerError" class="toast toast-error" style="display:none"></div>
+    <div id="providerSuccess" class="toast toast-ok" style="display:none">Saved.</div>
+
+    <div id="providerNotConfigured" style="display:none">
+      <div class="pill" style="margin-bottom:12px;background:var(--tool-bg,#1a1f27);border:1px solid var(--accent)">
+        <strong>PI_MODELS_JSON_PATH</strong> is not set.<br>
+        Add the following to your <code>.env</code> file and restart the web container:
+        <pre style="margin:8px 0 0;font-size:12px">PI_MODELS_JSON_PATH=/var/opt/piwebdev/models.json</pre>
+      </div>
+    </div>
+
+    <div id="providerEditor" style="display:none">
+      <p class="muted small" id="providerPath"></p>
+
+      <h3 style="margin:0 0 8px">Import from Ollama</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-end">
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:4px">Ollama URL</label>
+          <input id="ollamaUrl" type="text" value="http://localhost:11434" style="width:240px">
+        </div>
+        <button id="ollamaFetch" class="secondary" type="button">Fetch models</button>
+      </div>
+      <div id="ollamaModels" style="display:none;margin-bottom:16px">
+        <p class="muted small" style="margin:0 0 6px">Select models to add under the <code>ollama</code> provider:</p>
+        <div id="ollamaModelList" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+        <button id="ollamaAdd" class="secondary" type="button">Add selected to catalog</button>
+      </div>
+      <div id="ollamaError" class="toast toast-error" style="display:none"></div>
+
+      <h3 style="margin:0 0 8px">Quick-add</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-end">
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:4px">Provider</label>
+          <select id="qaProvider" class="form-select" style="min-width:160px">
+            <option value="anthropic">anthropic</option>
+            <option value="openai">openai</option>
+            <option value="openai-codex">openai-codex</option>
+            <option value="gemini">gemini</option>
+            <option value="ollama">ollama</option>
+            <option value="openrouter">openrouter</option>
+            <option value="mistral">mistral</option>
+            <option value="groq">groq</option>
+            <option value="xai">xai</option>
+            <option value="deepseek">deepseek</option>
+            <option value="fireworks">fireworks</option>
+            <option value="bedrock">bedrock</option>
+            <option value="vertex">vertex</option>
+            <option value="_custom">— custom —</option>
+          </select>
+        </div>
+        <div id="qaCustomProviderWrap" style="display:none">
+          <label class="small muted" style="display:block;margin-bottom:4px">Custom provider name</label>
+          <input id="qaCustomProvider" type="text" placeholder="my-provider" style="width:160px">
+        </div>
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:4px">Model ID</label>
+          <input id="qaModel" type="text" placeholder="e.g. gemini-2.5-pro" style="width:220px">
+        </div>
+        <div>
+          <label class="small muted" style="display:block;margin-bottom:4px">Reasoning?</label>
+          <input id="qaReasoning" type="checkbox" style="width:auto;margin-top:6px">
+        </div>
+        <button id="qaAdd" class="secondary" type="button">Add model</button>
+      </div>
+
+      <h3 style="margin:0 0 8px">Raw JSON</h3>
+      <textarea id="providerJson" rows="20" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5"></textarea>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button id="providerSave" type="button">Save</button>
+        <a class="button secondary" href="/">Cancel</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+(function() {
+  const errorEl = document.getElementById('providerError');
+  const successEl = document.getElementById('providerSuccess');
+  const notConfigEl = document.getElementById('providerNotConfigured');
+  const editorEl = document.getElementById('providerEditor');
+  const jsonEl = document.getElementById('providerJson');
+  const pathEl = document.getElementById('providerPath');
+  const qaProvider = document.getElementById('qaProvider');
+  const qaCustomWrap = document.getElementById('qaCustomProviderWrap');
+  const qaCustom = document.getElementById('qaCustomProvider');
+  const qaModel = document.getElementById('qaModel');
+  const qaReasoning = document.getElementById('qaReasoning');
+
+  function showError(msg) {
+    errorEl.textContent = msg;
+    errorEl.style.display = 'block';
+    successEl.style.display = 'none';
+  }
+
+  async function load() {
+    try {
+      const r = await fetch('/api/models/config/', {headers: {'X-CSRFToken': getCsrf()}});
+      if (r.status === 400) {
+        const d = await r.json();
+        if (d.error && d.error.includes('PI_MODELS_JSON_PATH')) {
+          notConfigEl.style.display = 'block';
+          return;
+        }
+        showError(d.error || 'Error loading config');
+        return;
+      }
+      const d = await r.json();
+      editorEl.style.display = 'block';
+      pathEl.textContent = 'Editing: ' + d.path;
+      jsonEl.value = JSON.stringify(d.config, null, 2);
+    } catch(e) {
+      showError('Failed to load: ' + e.message);
+    }
+  }
+
+  document.getElementById('providerSave').addEventListener('click', async () => {
+    let config;
+    try {
+      config = JSON.parse(jsonEl.value);
+    } catch(e) {
+      showError('Invalid JSON: ' + e.message);
+      return;
+    }
+    try {
+      const r = await fetch('/api/models/config/', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+        body: JSON.stringify({config})
+      });
+      const d = await r.json();
+      if (d.ok) {
+        successEl.style.display = 'block';
+        errorEl.style.display = 'none';
+        setTimeout(() => { successEl.style.display = 'none'; }, 3000);
+      } else {
+        showError(d.error || 'Save failed');
+      }
+    } catch(e) {
+      showError('Save failed: ' + e.message);
+    }
+  });
+
+  qaProvider.addEventListener('change', () => {
+    qaCustomWrap.style.display = qaProvider.value === '_custom' ? 'block' : 'none';
+  });
+
+  document.getElementById('qaAdd').addEventListener('click', () => {
+    const prov = qaProvider.value === '_custom' ? qaCustom.value.trim() : qaProvider.value;
+    const model = qaModel.value.trim();
+    if (!prov || !model) { showError('Provider and model ID are required'); return; }
+    let config;
+    try {
+      config = JSON.parse(jsonEl.value);
+    } catch(e) {
+      showError('Fix JSON errors before adding: ' + e.message);
+      return;
+    }
+    if (!config.providers) config.providers = {};
+    if (!config.providers[prov]) config.providers[prov] = {models: []};
+    if (!config.providers[prov].models) config.providers[prov].models = [];
+    const entry = {id: model};
+    if (qaReasoning.checked) entry.reasoning = true;
+    config.providers[prov].models.push(entry);
+    jsonEl.value = JSON.stringify(config, null, 2);
+    qaModel.value = '';
+    qaReasoning.checked = false;
+    errorEl.style.display = 'none';
+  });
+
+  function getCsrf() {
+    return document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('csrftoken='))?.split('=')[1] || '';
+  }
+
+  // Ollama import
+  const ollamaFetchBtn = document.getElementById('ollamaFetch');
+  const ollamaModelsEl = document.getElementById('ollamaModels');
+  const ollamaModelList = document.getElementById('ollamaModelList');
+  const ollamaAddBtn = document.getElementById('ollamaAdd');
+  const ollamaErrorEl = document.getElementById('ollamaError');
+
+  ollamaFetchBtn.addEventListener('click', async () => {
+    const base = document.getElementById('ollamaUrl').value.replace(/\/$/, '');
+    ollamaErrorEl.style.display = 'none';
+    ollamaFetchBtn.disabled = true; ollamaFetchBtn.textContent = 'Fetching…';
+    try {
+      const r = await fetch('/api/ollama/tags/?url=' + encodeURIComponent(base));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const models = (d.models || []).map(m => m.name || m.model).filter(Boolean);
+      if (!models.length) { ollamaErrorEl.textContent = 'No models found in Ollama.'; ollamaErrorEl.style.display = 'block'; return; }
+      ollamaModelList.innerHTML = models.map(m =>
+        `<label style="display:flex;align-items:center;gap:4px;background:var(--tool-bg,#1a1f27);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px">
+          <input type="checkbox" value="${m}" checked style="width:auto"> ${m}
+        </label>`
+      ).join('');
+      ollamaModelsEl.style.display = 'block';
+    } catch(e) {
+      ollamaErrorEl.textContent = 'Could not reach Ollama at ' + base + ': ' + e.message + '. Make sure Ollama is running.';
+      ollamaErrorEl.style.display = 'block';
+    } finally {
+      ollamaFetchBtn.disabled = false; ollamaFetchBtn.textContent = 'Fetch models';
+    }
+  });
+
+  ollamaAddBtn.addEventListener('click', () => {
+    const selected = [...ollamaModelList.querySelectorAll('input:checked')].map(i => i.value);
+    if (!selected.length) return;
+    let config;
+    try { config = JSON.parse(jsonEl.value); } catch(e) { showError('Fix JSON errors before adding: ' + e.message); return; }
+    if (!config.providers) config.providers = {};
+    if (!config.providers.ollama) config.providers.ollama = {models: []};
+    if (!config.providers.ollama.models) config.providers.ollama.models = [];
+    const existing = new Set(config.providers.ollama.models.map(m => m.id));
+    selected.filter(m => !existing.has(m)).forEach(m => config.providers.ollama.models.push({id: m}));
+    jsonEl.value = JSON.stringify(config, null, 2);
+    ollamaModelsEl.style.display = 'none';
+    errorEl.style.display = 'none';
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

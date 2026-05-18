@@ -35,6 +35,7 @@
 # Recent Changes
 
 - **Pi Settings Models Dropdown Fixed (2026-05-11)**: `app/core/utils.py` now reads `/home/entwickler/.pi/agent/models.json` (or `PI_MODELS_JSON_PATH` env var) to dynamically populate provider and model dropdowns. Added `DynamicChoiceField` in `forms.py` to reload choices at render time. Ollama provider and all models from `models.json` are now selectable, with reasoning-capable models marked `[R]`. The "model/provider discovery" idea from Ideas For Later is now implemented.
+- **Current development wrapped (2026-05-18)**: Added provider catalog UI/templates, user/project settings pages, context-file toggles/migrations, compact/session-stat websocket handling, local-network Compose port binding, and improved provider fallback handling for list-based `models.json` entries.
 
 # Ideas For Later
 
